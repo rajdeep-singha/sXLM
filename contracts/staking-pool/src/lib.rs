@@ -163,7 +163,6 @@ impl StakingPool {
     }
 
     // Update rewards (called by our backend)
-    // Increases total_xlm_staked to reflect staking rewards
     pub fn accrue_rewards(env: Env, reward_amount: i128) -> Result<(), Error> {
         let admin = get_admin(&env);
         admin.require_auth();
@@ -196,12 +195,10 @@ impl StakingPool {
         (total_xlm_staked * PRECISION) / sxlm_supply
     }
 
-    // Get total XLM staked in the pool
     pub fn get_total_staked(env: Env) -> i128 {
         get_total_xlm_staked(&env)
     }
 
-    // Get total sXLM supply
     pub fn get_total_supply(env: Env) -> i128 {
         let sxlm_token = get_sxlm_token(&env);
         Self::get_sxlm_total_supply(&env, &sxlm_token)
@@ -240,7 +237,6 @@ impl StakingPool {
             return xlm_amount;
         }
 
-        // sXLM = XLM * (sxlm_supply / total_xlm_staked)
         (xlm_amount * sxlm_supply) / total_xlm_staked
     }
 
@@ -254,11 +250,9 @@ impl StakingPool {
             return 0;
         }
 
-        // XLM = sXLM * (total_xlm_staked / sxlm_supply)
         (sxlm_amount * total_xlm_staked) / sxlm_supply
     }
 
-    // Instant redemption 
     fn instant_redemption(env: &Env, user: &Address, xlm_amount: i128) -> Result<(), Error> {
         let xlm_token = token::Client::new(env, &Self::get_native_token(env));
         xlm_token.transfer(&env.current_contract_address(), user, &xlm_amount);
@@ -327,7 +321,6 @@ impl StakingPool {
     // Get native XLM token address
     fn get_native_token(env: &Env) -> Address {
         // Stellar native asset address (XLM)
-        // This would be the actual Stellar Asset Contract address for XLM
         Address::from_string(&String::from_str(env, "NATIVE_XLM_ADDRESS"))
     }
 }
