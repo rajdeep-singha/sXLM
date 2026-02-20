@@ -352,4 +352,6 @@ mod sxlm_token {
 }
 
 #[cfg(test)]
-mod test;
+mod test{
+    include!("test.rs");
+}
