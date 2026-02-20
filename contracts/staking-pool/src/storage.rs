@@ -29,7 +29,7 @@ pub fn set_admin(env: &Env, admin: &Address) {
     env.storage().instance().set(&ADMIN, admin);
 }
 
-// ============ SXLM TOKEN 
+// SXLM TOKEN 
 
 pub fn get_sxlm_token(env: &Env) -> Address {
     env.storage().instance().get(&SXLM_TOKEN).unwrap()
