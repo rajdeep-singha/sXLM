@@ -24,9 +24,9 @@ export default function Navbar() {
     <nav className="fixed top-0 left-0 right-0 z-50 bg-black/90 backdrop-blur-sm border-b border-border">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14">
-          <Link to="/" className="text-sm font-bold tracking-wider text-white">
-            sXLM
-          </Link>
+          <Link to="/" className="flex items-center">
+  <img src="/logo.png" alt="Logo" className="h-8 w-auto" />
+</Link>
 
           <div className="hidden md:flex items-center gap-0.5">
             {NAV_LINKS.map((link) => {
