@@ -9,9 +9,11 @@
  *  – Layout : Lido.fi structure — stats strip · numbered list · product cards
  */
 
+
 import { useState, useRef, useEffect, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { useProtocol } from '../hooks/useProtocol';
+
 
 /* ── Stellar brand palette ────────────────────────────────────────────────── */
 const Y  = '#F5CF00';   // Stellar yellow
@@ -22,6 +24,7 @@ const BR = '#222222';   // border (matches border-border)
 const W  = '#ffffff';   // white
 const T2 = '#a3a3a3';   // neutral-400 secondary text
 const T3 = '#525252';   // neutral-600 muted text
+
 
 /* ── Animated counter ─────────────────────────────────────────────────────── */
 function useCountUp(target: number, duration = 1600) {
@@ -42,6 +45,7 @@ function useCountUp(target: number, duration = 1600) {
   return val;
 }
 
+
 function fmt(n: number, dec = 2) {
   if (n >= 1e9) return `${(n / 1e9).toFixed(dec)}B`;
   if (n >= 1e6) return `${(n / 1e6).toFixed(dec)}M`;
@@ -49,8 +53,8 @@ function fmt(n: number, dec = 2) {
   return n.toFixed(dec);
 }
 
+
 /* ── Stellar logo mark ────────────────────────────────────────────────────── */
-<<<<<<< HEAD
 function StellarMark({ size = 32, color = "#F5C542" }: { size?: number; color?: string }) {
   return (
     <svg
@@ -67,6 +71,7 @@ function StellarMark({ size = 32, color = "#F5C542" }: { size?: number; color?: 
         opacity="0.6"
       />
 
+
       {/* Middle Wave */}
       <path
         d="M8 32C20 40 38 38 56 24C40 34 24 36 8 32Z"
@@ -74,28 +79,23 @@ function StellarMark({ size = 32, color = "#F5C542" }: { size?: number; color?: 
         opacity="0.85"
       />
 
+
       {/* Top Wave */}
       <path
         d="M8 26C22 32 40 28 56 14C40 22 24 26 8 26Z"
         fill={color}
       />
 
+
       {/* Star */}
       <path
         d="M46 8L49 14L56 16L49 18L46 24L43 18L36 16L43 14L46 8Z"
         fill="white"
-=======
-function StellarMark({ size = 28, color = W }: { size?: number; color?: string }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 32 32" fill="none">
-      <path
-        d="M24.7 10.56l-1.57.78-13.42 6.68a6.4 6.4 0 01-.07-1 6.5 6.5 0 019.65-5.68l1.75-.87.34-.17A8 8 0 008 16a8.1 8.1 0 00.1 1.25L5.3 18.7v1.74l3.43-1.71a8 8 0 0015.12-2.48L26.7 15v-1.74l-2.56 1.27A8.07 8.07 0 0024.2 13l2.5-1.25v-1.73zM16 22.5a6.5 6.5 0 01-6-3.99l13.5-6.72A6.5 6.5 0 0116 22.5z"
-        fill={color}
->>>>>>> origin/rudy
       />
     </svg>
   );
 }
+
 
 /* ── Hero visual: 3D rotating Stellar mark ───────────────────────────────── */
 function StellarHeroVisual({ aprVal }: { aprVal: string }) {
@@ -109,7 +109,6 @@ function StellarHeroVisual({ aprVal }: { aprVal: string }) {
           borderRadius: '50%',
         }} />
         <div style={{ animation: 'stellar-float 4s ease-in-out infinite' }}>
-<<<<<<< HEAD
   <div
     style={{
       animation: 'stellar-rotate 10s linear infinite',
@@ -117,22 +116,25 @@ function StellarHeroVisual({ aprVal }: { aprVal: string }) {
     }}
   >
     <svg width="160" height="160" viewBox="0 0 160 160" fill="none">
-      
+     
       {/* Outer Ring */}
       <circle cx="80" cy="80" r="78" stroke={BR} strokeWidth="1" />
+
 
       {/* Inner Dark Circle */}
       <circle cx="80" cy="80" r="60" stroke="#1a1a1a" strokeWidth="1" fill="#0a0a0a" />
 
+
       {/* Centered Logo Group */}
       <g transform="translate(20, 30) scale(2)">
-        
+       
         {/* Bottom Wave */}
         <path
           d="M8 38C16 48 32 50 56 34C40 46 24 44 8 38Z"
           fill={Y}
           opacity="0.6"
         />
+
 
         {/* Middle Wave */}
         <path
@@ -141,11 +143,13 @@ function StellarHeroVisual({ aprVal }: { aprVal: string }) {
           opacity="0.85"
         />
 
+
         {/* Top Wave */}
         <path
           d="M8 26C22 32 40 28 56 14C40 22 24 26 8 26Z"
           fill={Y}
         />
+
 
         {/* Star */}
         <path
@@ -153,25 +157,13 @@ function StellarHeroVisual({ aprVal }: { aprVal: string }) {
           fill="white"
         />
 
+
       </g>
     </svg>
   </div>
 </div>
-=======
-          <div style={{ animation: 'stellar-rotate 10s linear infinite', transformStyle: 'preserve-3d' }}>
-            <svg width="160" height="160" viewBox="0 0 160 160" fill="none">
-              <circle cx="80" cy="80" r="78" stroke={BR} strokeWidth="1" />
-              <circle cx="80" cy="80" r="60" stroke="#1a1a1a" strokeWidth="1" fill="#0a0a0a" />
-              {/* Stellar path scaled to fit */}
-              <path
-                d="M122.2 52.8l-7.85 3.9-67.1 33.45a32 32 0 01-.35-5A32.5 32.5 0 0195 57.5l8.7-4.35 1.7-.85A40 40 0 0040 80a40.5 40.5 0 00.5 6.25L26 93.55v8.7l17.15-8.55a40 40 0 0075.6-12.4l11.25-5.6V67l-12.8 6.4A40.3 40.3 0 00120.9 65l12.45-6.25v-8.65zM80 112.5a32.5 32.5 0 01-30-19.95l67.5-33.6A32.5 32.5 0 0180 112.5z"
-                fill={Y}
-              />
-            </svg>
-          </div>
-        </div>
->>>>>>> origin/rudy
       </div>
+
 
       {/* Stats under the visual */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, width: '100%', background: BR, border: `1px solid ${BR}`, borderRadius: 12, overflow: 'hidden' }}>
@@ -192,6 +184,7 @@ function StellarHeroVisual({ aprVal }: { aprVal: string }) {
     </div>
   );
 }
+
 
 /* ── Numbered block (Lido pattern) ───────────────────────────────────────── */
 function NumberedBlock({
@@ -243,6 +236,7 @@ function NumberedBlock({
     </div>
   );
 }
+
 
 /* ── Product card ─────────────────────────────────────────────────────────── */
 function ProductCard({
@@ -301,34 +295,41 @@ function ProductCard({
   );
 }
 
+
 /* ── Main ─────────────────────────────────────────────────────────────────── */
 export default function Dashboard() {
   const { stats, apy, validators, isLoading } = useProtocol();
+
 
   const tvlXlm  = stats.totalStaked / 1e7;
   const apr     = apy.currentApy > 0 ? apy.currentApy : (apy.apy30d > 0 ? apy.apy30d : 0);
   const er      = stats.exchangeRate;
   const valCnt  = stats.totalValidators || validators.length;
 
+
   const aniApr  = useCountUp(apr);
   const aniTvl  = useCountUp(tvlXlm);
   const aniEr   = useCountUp(er);
   const aniVals = useCountUp(valCnt, 1400);
+
 
   const avgUptime = validators.length > 0
     ? validators.reduce((s, v) => s + v.uptimePercent, 0) / validators.length : 0;
   const avgComm = validators.length > 0
     ? validators.reduce((s, v) => s + v.commissionPercent, 0) / validators.length : 0;
 
+
   const aprDisplay  = isLoading ? '—' : apr > 0 ? `${aniApr.toFixed(2)}%` : '—';
   const tvlDisplay  = isLoading ? '—' : `${fmt(aniTvl, 0)} XLM`;
   const erDisplay   = isLoading ? '—' : aniEr.toFixed(4);
   const valDisplay  = isLoading ? '—' : String(Math.round(aniVals) || '—');
 
+
   /* Shared layout helpers */
   const wrap = (maxW = 1100): CSSProperties => ({ maxWidth: maxW, margin: '0 auto', padding: '0 24px' });
   const divider: CSSProperties = { borderTop: `1px solid ${BR}` };
   const sectionPad = (py = 80): CSSProperties => ({ padding: `${py}px 0` });
+
 
   /* Yellow label */
   const yl: CSSProperties = {
@@ -336,19 +337,23 @@ export default function Dashboard() {
     letterSpacing: '0.12em', color: Y, marginBottom: 12,
   };
 
+
   /* Section heading */
   const sh: CSSProperties = {
     fontSize: 'clamp(1.7rem, 3.2vw, 2.4rem)', fontWeight: 700,
     color: W, lineHeight: 1.15, letterSpacing: '-0.3px',
   };
 
+
   return (
     <div style={{ background: B, color: W, minHeight: '100vh' }}>
+
 
       {/* ══ HERO ═══════════════════════════════════════════════════════ */}
       <section style={{ ...sectionPad(72), borderBottom: `1px solid ${BR}` }}>
         <div style={wrap()}>
           <div className="lido-hero-grid">
+
 
             {/* Left */}
             <div>
@@ -369,6 +374,7 @@ export default function Dashboard() {
                 }}>Testnet</span>
               </div>
 
+
               <h1 className="lido-reveal" style={{
                 fontSize: 'clamp(2.6rem, 5.5vw, 4.5rem)',
                 fontWeight: 700, lineHeight: 1.06,
@@ -378,6 +384,7 @@ export default function Dashboard() {
                 Liquid Staking<br />
                 <span style={{ color: Y }}>for Stellar</span>
               </h1>
+
 
               <p className="lido-reveal" style={{
                 fontSize: 16, color: T2, lineHeight: 1.75,
@@ -389,6 +396,7 @@ export default function Dashboard() {
                 — a yield-bearing token that appreciates automatically.
                 Stay liquid while earning Stellar staking rewards.
               </p>
+
 
               <div className="lido-reveal" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', animationDelay: '200ms' }}>
                 <Link
@@ -423,6 +431,7 @@ export default function Dashboard() {
               </div>
             </div>
 
+
             {/* Right — 3D Stellar visual */}
             <div className="lido-fade" style={{ animationDelay: '250ms' }}>
               <StellarHeroVisual aprVal={aprDisplay} />
@@ -430,6 +439,7 @@ export default function Dashboard() {
           </div>
         </div>
       </section>
+
 
       {/* ══ STATS STRIP (Lido — plain numbers, border dividers) ════════ */}
       <section style={{ background: S, borderBottom: `1px solid ${BR}` }}>
@@ -459,10 +469,12 @@ export default function Dashboard() {
         </div>
       </section>
 
+
       {/* ══ WHAT IS sXLM ════════════════════════════════════════════════ */}
       <section style={{ ...sectionPad(), ...divider }}>
         <div style={wrap()}>
           <div className="lido-two-col">
+
 
             {/* Left */}
             <div className="lido-reveal">
@@ -482,6 +494,7 @@ export default function Dashboard() {
                 your sXLM is worth more XLM over time.
               </p>
             </div>
+
 
             {/* Right — formula */}
             <div className="lido-reveal" style={{
@@ -518,11 +531,13 @@ export default function Dashboard() {
         </div>
       </section>
 
+
       {/* ══ PROTOCOL FEATURES — numbered list ═══════════════════════════ */}
       <section style={{ ...sectionPad(), background: S, ...divider, borderBottom: `1px solid ${BR}` }}>
         <div style={wrap()}>
           <p style={yl}>5 Milestones · Fully built</p>
           <h2 style={{ ...sh, marginBottom: 40 }}>Protocol Features</h2>
+
 
           <div style={{ borderTop: `1px solid ${BR}` }}>
             {([
@@ -541,6 +556,7 @@ export default function Dashboard() {
         </div>
       </section>
 
+
       {/* ══ DeFi ECOSYSTEM ══════════════════════════════════════════════ */}
       <section style={{ ...sectionPad(), ...divider }}>
         <div style={wrap()}>
@@ -558,6 +574,7 @@ export default function Dashboard() {
             </p>
           </div>
 
+
           {/* Product cards — Lido style: flush border grid */}
           <div style={{ border: `1px solid ${BR}`, borderRadius: 8, overflow: 'hidden' }}>
             <div className="lido-four-cards" style={{ background: BR }}>
@@ -567,6 +584,7 @@ export default function Dashboard() {
               <ProductCard icon="🗳" title="Governance" href="/governance"             desc="Vote on protocol parameters using sXLM balance. Create and execute on-chain proposals." delay={180} />
             </div>
           </div>
+
 
           {/* Minting example row */}
           <div style={{
@@ -596,6 +614,7 @@ export default function Dashboard() {
         </div>
       </section>
 
+
       {/* ══ VALIDATORS ══════════════════════════════════════════════════ */}
       <section style={{ ...sectionPad(), background: S, ...divider, borderBottom: `1px solid ${BR}` }}>
         <div style={wrap()}>
@@ -612,6 +631,7 @@ export default function Dashboard() {
                 commission, voting power, and performance. The Risk Engine auto-rebalances
                 in real time — your APR is always optimised.
               </p>
+
 
               {/* Stat row (Lido border table style) */}
               <div style={{ border: `1px solid ${BR}`, borderRadius: 6, overflow: 'hidden', display: 'flex' }}>
@@ -631,6 +651,7 @@ export default function Dashboard() {
                 ))}
               </div>
             </div>
+
 
             <div className="lido-reveal" style={{
               animationDelay: '100ms',
@@ -659,11 +680,13 @@ export default function Dashboard() {
         </div>
       </section>
 
+
       {/* ══ LIVE STATS — border grid ════════════════════════════════════ */}
       <section style={{ ...sectionPad(), ...divider }}>
         <div style={wrap()}>
           <p style={yl}>On-chain · Real-time</p>
           <h2 style={{ ...sh, marginBottom: 32 }}>Protocol Statistics</h2>
+
 
           <div style={{ border: `1px solid ${BR}`, borderRadius: 8, overflow: 'hidden' }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' }}>
@@ -699,6 +722,7 @@ export default function Dashboard() {
           </div>
         </div>
       </section>
+
 
       {/* ══ CTA ═════════════════════════════════════════════════════════ */}
       <section style={{ ...sectionPad(96), background: S, ...divider, borderBottom: `1px solid ${BR}` }}>
@@ -752,6 +776,7 @@ export default function Dashboard() {
         </div>
       </section>
 
+
       {/* ══ FOOTER ══════════════════════════════════════════════════════ */}
       <footer style={{ borderTop: `1px solid ${BR}`, padding: '48px 0 36px', background: B }}>
         <div style={wrap()}>
@@ -786,6 +811,7 @@ export default function Dashboard() {
             ))}
           </div>
 
+
           <div style={{ borderTop: `1px solid ${BR}`, paddingTop: 28, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
             <p style={{ fontSize: 12, color: T3 }}>
               © 2025 sXLM Protocol · Native XLM Liquid Restaking
@@ -799,3 +825,5 @@ export default function Dashboard() {
     </div>
   );
 }
+
+
