@@ -56,7 +56,7 @@ impl WithdrawalQueue {
         staking_pool.require_auth();
 
         if xlm_amount <= 0 {
-            return Err(2); // InvalidAmount
+            return Err(2); // Invalid AMOUNT
         }
 
         let request_id = get_next_id(&env);
