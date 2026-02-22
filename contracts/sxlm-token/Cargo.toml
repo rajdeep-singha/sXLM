@@ -1,12 +1,17 @@
 [package]
 name = "sxlm-token"
 version = "0.1.0"
+<<<<<<< HEAD
 edition = "2024"
+=======
+edition = "2021"
+>>>>>>> origin/rudy
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
+<<<<<<< HEAD
 soroban-sdk = "20.5.0"
 arbitrary = "1.3"
 [dev-dependencies]
@@ -26,3 +31,10 @@ lto = true
 [profile.release-with-logs]
 inherits = "release"
 debug-assertions = true
+=======
+soroban-sdk = { workspace = true }
+soroban-token-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+>>>>>>> origin/rudy

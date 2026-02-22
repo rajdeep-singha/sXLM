@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { useState, useRef, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { 
@@ -12,6 +13,11 @@ import {
   ArrowRight,
   Sparkles
 } from 'lucide-react';
+=======
+import { useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { Menu, X } from 'lucide-react';
+>>>>>>> origin/rudy
 import WalletButton from './WalletButton';
 
 const NAV_LINKS = [
@@ -19,6 +25,7 @@ const NAV_LINKS = [
   { path: '/stake', label: 'Stake' },
   { path: '/withdraw', label: 'Withdraw' },
   { path: '/validators', label: 'Validators' },
+<<<<<<< HEAD
   { path: '/liquidity', label: 'Liquidity' },
 ];
 
@@ -58,11 +65,20 @@ const DROPDOWN_LINKS = [
     icon: Layers,
     color: 'yellow'
   },
+=======
+  { path: '/analytics', label: 'Analytics' },
+  { path: '/lending', label: 'Lending' },
+  { path: '/liquidity', label: 'Liquidity' },
+  { path: '/governance', label: 'Governance' },
+  { path: '/leverage', label: 'Leverage' },
+  { path: '/restaking', label: 'Restaking' },
+>>>>>>> origin/rudy
 ];
 
 export default function Navbar() {
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+<<<<<<< HEAD
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isMobileDropdownOpen, setIsMobileDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -83,13 +99,20 @@ export default function Navbar() {
       setIsDropdownOpen(false);
     }, 150);
   }, []);
+=======
+>>>>>>> origin/rudy
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 bg-black/90 backdrop-blur-sm border-b border-border">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14">
+<<<<<<< HEAD
           <Link to="/" className="flex items-center">
             <img src="/logo.png" alt="Logo" className="h-8 w-auto" />
+=======
+          <Link to="/" className="text-sm font-bold tracking-wider text-white">
+            sXLM
+>>>>>>> origin/rudy
           </Link>
 
           <div className="hidden md:flex items-center gap-0.5">
@@ -109,6 +132,7 @@ export default function Navbar() {
                 </Link>
               );
             })}
+<<<<<<< HEAD
 
             <div 
               className="relative" 
@@ -237,6 +261,8 @@ style={{
                 </div>
               </div>
             </div>
+=======
+>>>>>>> origin/rudy
           </div>
 
           <div className="flex items-center gap-3">
@@ -271,6 +297,7 @@ style={{
                 </Link>
               );
             })}
+<<<<<<< HEAD
 
             <button
               onClick={() => setIsMobileDropdownOpen(!isMobileDropdownOpen)}
@@ -312,6 +339,8 @@ style={{
               </div>
             )}
 
+=======
+>>>>>>> origin/rudy
             <div className="pt-3 border-t border-border">
               <WalletButton />
             </div>

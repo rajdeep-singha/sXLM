@@ -50,6 +50,7 @@ function fmt(n: number, dec = 2) {
 }
 
 /* ── Stellar logo mark ────────────────────────────────────────────────────── */
+<<<<<<< HEAD
 function StellarMark({ size = 32, color = "#F5C542" }: { size?: number; color?: string }) {
   return (
     <svg
@@ -83,6 +84,14 @@ function StellarMark({ size = 32, color = "#F5C542" }: { size?: number; color?: 
       <path
         d="M46 8L49 14L56 16L49 18L46 24L43 18L36 16L43 14L46 8Z"
         fill="white"
+=======
+function StellarMark({ size = 28, color = W }: { size?: number; color?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none">
+      <path
+        d="M24.7 10.56l-1.57.78-13.42 6.68a6.4 6.4 0 01-.07-1 6.5 6.5 0 019.65-5.68l1.75-.87.34-.17A8 8 0 008 16a8.1 8.1 0 00.1 1.25L5.3 18.7v1.74l3.43-1.71a8 8 0 0015.12-2.48L26.7 15v-1.74l-2.56 1.27A8.07 8.07 0 0024.2 13l2.5-1.25v-1.73zM16 22.5a6.5 6.5 0 01-6-3.99l13.5-6.72A6.5 6.5 0 0116 22.5z"
+        fill={color}
+>>>>>>> origin/rudy
       />
     </svg>
   );
@@ -100,6 +109,7 @@ function StellarHeroVisual({ aprVal }: { aprVal: string }) {
           borderRadius: '50%',
         }} />
         <div style={{ animation: 'stellar-float 4s ease-in-out infinite' }}>
+<<<<<<< HEAD
   <div
     style={{
       animation: 'stellar-rotate 10s linear infinite',
@@ -147,6 +157,20 @@ function StellarHeroVisual({ aprVal }: { aprVal: string }) {
     </svg>
   </div>
 </div>
+=======
+          <div style={{ animation: 'stellar-rotate 10s linear infinite', transformStyle: 'preserve-3d' }}>
+            <svg width="160" height="160" viewBox="0 0 160 160" fill="none">
+              <circle cx="80" cy="80" r="78" stroke={BR} strokeWidth="1" />
+              <circle cx="80" cy="80" r="60" stroke="#1a1a1a" strokeWidth="1" fill="#0a0a0a" />
+              {/* Stellar path scaled to fit */}
+              <path
+                d="M122.2 52.8l-7.85 3.9-67.1 33.45a32 32 0 01-.35-5A32.5 32.5 0 0195 57.5l8.7-4.35 1.7-.85A40 40 0 0040 80a40.5 40.5 0 00.5 6.25L26 93.55v8.7l17.15-8.55a40 40 0 0075.6-12.4l11.25-5.6V67l-12.8 6.4A40.3 40.3 0 00120.9 65l12.45-6.25v-8.65zM80 112.5a32.5 32.5 0 01-30-19.95l67.5-33.6A32.5 32.5 0 0180 112.5z"
+                fill={Y}
+              />
+            </svg>
+          </div>
+        </div>
+>>>>>>> origin/rudy
       </div>
 
       {/* Stats under the visual */}
