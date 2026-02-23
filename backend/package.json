@@ -1,0 +1,41 @@
+{
+  "name": "sxlm-protocol-backend",
+  "version": "1.0.0",
+  "description": "Backend services for sXLM liquid staking protocol on Stellar/Soroban",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "lint": "tsc --noEmit",
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "fastify": "^5.2.1",
+    "@fastify/rate-limit": "^10.2.1",
+    "@fastify/cors": "^10.0.2",
+    "@prisma/client": "^6.3.1",
+    "prisma": "^6.3.1",
+    "ioredis": "^5.4.2",
+    "@stellar/stellar-sdk": "^13.1.0",
+    "node-cron": "^3.0.3",
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.1",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "@types/node": "^22.12.0",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.19.2",
+    "vitest": "^3.0.5",
+    "@types/jsonwebtoken": "^9.0.7"
+  }
+}

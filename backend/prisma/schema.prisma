@@ -1,0 +1,126 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Validator {
+  id               Int       @id @default(autoincrement())
+  pubkey           String    @unique
+  uptime           Float
+  commission       Float
+  votingPower      Float?
+  performanceScore Float
+  allocatedStake   BigInt
+  lastChecked      DateTime
+
+  history ValidatorHistory[]
+
+  @@map("validators")
+}
+
+model ValidatorHistory {
+  id               Int      @id @default(autoincrement())
+  validatorId      Int
+  uptime           Float
+  commission       Float
+  performanceScore Float
+  allocatedStake   BigInt
+  timestamp        DateTime @default(now())
+
+  validator Validator @relation(fields: [validatorId], references: [id])
+
+  @@index([validatorId, timestamp])
+  @@map("validator_history")
+}
+
+model RewardSnapshot {
+  id           Int      @id @default(autoincrement())
+  timestamp    DateTime @default(now())
+  totalStaked  BigInt
+  totalSupply  BigInt
+  exchangeRate Float
+  apy          Float
+
+  @@map("reward_snapshots")
+}
+
+model Withdrawal {
+  id         Int      @id @default(autoincrement())
+  wallet     String
+  amount     BigInt
+  status     String   @default("pending")
+  unlockTime DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([wallet])
+  @@index([status])
+  @@map("withdrawals")
+}
+
+model ProtocolMetrics {
+  id                Int      @id @default(autoincrement())
+  totalStaked       BigInt
+  totalSupply       BigInt
+  tvlUsd            Float
+  avgValidatorScore Float
+  protocolFees      BigInt   @default(0)
+  updatedAt         DateTime @default(now())
+
+  @@map("protocol_metrics")
+}
+
+model CollateralPosition {
+  id            Int      @id @default(autoincrement())
+  wallet        String
+  sxlmDeposited BigInt
+  xlmBorrowed   BigInt
+  healthFactor  Float
+  updatedAt     DateTime @default(now())
+
+  @@index([wallet])
+  @@map("collateral_positions")
+}
+
+model LPPosition {
+  id            Int      @id @default(autoincrement())
+  wallet        String
+  lpTokens      BigInt
+  xlmDeposited  BigInt
+  sxlmDeposited BigInt
+  updatedAt     DateTime @default(now())
+
+  @@index([wallet])
+  @@map("lp_positions")
+}
+
+model GovernanceProposal {
+  id           Int      @id @default(autoincrement())
+  proposer     String
+  paramKey     String
+  newValue     String
+  votesFor     BigInt   @default(0)
+  votesAgainst BigInt   @default(0)
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@map("governance_proposals")
+}
+
+model LiquidationEvent {
+  id               Int      @id @default(autoincrement())
+  liquidator       String
+  borrower         String
+  debtRepaid       BigInt
+  collateralSeized BigInt
+  ledger           Int
+  createdAt        DateTime @default(now())
+
+  @@index([borrower])
+  @@index([liquidator])
+  @@map("liquidation_events")
+}
