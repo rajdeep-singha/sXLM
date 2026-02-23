@@ -15,7 +15,7 @@ import {
 import WalletButton from './WalletButton';
 
 const NAV_LINKS = [
-  { path: '/', label: 'Home' },
+  // { path: '/dashboard', label: 'Dashboard' },
   { path: '/stake', label: 'Stake' },
   { path: '/withdraw', label: 'Withdraw' },
   { path: '/validators', label: 'Validators' },
@@ -66,7 +66,7 @@ export default function Navbar() {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isMobileDropdownOpen, setIsMobileDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isDropdownActive = DROPDOWN_LINKS.some(link => location.pathname === link.path);
 

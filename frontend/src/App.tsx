@@ -1,5 +1,6 @@
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, useLocation } from 'react-router-dom';
 import Navbar from './components/Navbar';
+import Landing from './pages/Landing';
 import Dashboard from './pages/Dashboard';
 import Stake from './pages/Stake';
 import Withdraw from './pages/Withdraw';
@@ -11,13 +12,17 @@ import Governance from './pages/Governance';
 import Leverage from './pages/Leverage';
 import Restaking from './pages/Restaking';
 
-function App() {
+function AppContent() {
+  const location = useLocation();
+  const isLandingPage = location.pathname === '/';
+
   return (
     <div className="min-h-screen bg-black text-white">
-      <Navbar />
-      <main className="pt-16">
+      {!isLandingPage && <Navbar />}
+      <main className={!isLandingPage ? 'pt-16' : ''}>
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Landing />} />
+          {/* <Route path="/dashboard" element={<Dashboard />} /> */}
           <Route path="/stake" element={<Stake />} />
           <Route path="/withdraw" element={<Withdraw />} />
           <Route path="/validators" element={<Validators />} />
@@ -31,6 +36,10 @@ function App() {
       </main>
     </div>
   );
+}
+
+function App() {
+  return <AppContent />;
 }
 
 export default App;
