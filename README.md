@@ -1,4 +1,4 @@
-# sXLM Protocol
+# STELLO
 
 A liquid staking protocol for Stellar (XLM) built on Soroban. Users stake XLM to receive sXLM, participate in validator delegation, and access lending, liquidity pools, governance, and leverage features.
 
