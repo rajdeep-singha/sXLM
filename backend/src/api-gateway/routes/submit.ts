@@ -78,6 +78,7 @@ export const submitRoutes: FastifyPluginAsync<{ stakingEngine: StakingEngine }> 
         txHash: hash,
         status: confirmed.status,
         ledger: confirmed.ledger,
+        pending: confirmed.pending ?? false,
       };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : (err as { message?: string })?.message ?? "Submit failed";
@@ -133,29 +134,50 @@ export const submitRoutes: FastifyPluginAsync<{ stakingEngine: StakingEngine }> 
 /**
  * Poll for transaction confirmation using raw JSON-RPC to avoid SDK XDR
  * parse errors ("Bad union switch") that occur with newer protocol versions.
+ *
+ * Strategy: poll up to 60s with increasing back-off to survive rate limits.
+ * If still unconfirmed, return PENDING (not an error) so the frontend can
+ * show the hash and let the user verify manually.
  */
 async function pollTransaction(
   rpcUrl: string,
   hash: string,
-  maxAttempts = 20,
-  intervalMs = 2000
-): Promise<{ status: string; ledger?: number }> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const rpcResponse = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getTransaction",
-        params: { hash },
-      }),
-    });
+): Promise<{ status: string; ledger?: number; pending?: boolean }> {
+  // Poll schedule: 6×2s, then 6×4s, then 6×6s ≈ 72s total, 18 requests
+  const schedule = [
+    ...Array(6).fill(2000),
+    ...Array(6).fill(4000),
+    ...Array(6).fill(6000),
+  ];
 
-    const rpcResult = await rpcResponse.json() as {
+  for (const intervalMs of schedule) {
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+
+    let rpcResult: {
       result?: { status: string; ledger?: number; errorResultXdr?: string };
       error?: { message: string };
     };
+
+    try {
+      const rpcResponse = await fetch(rpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getTransaction",
+          params: { hash },
+        }),
+      });
+
+      // If rate-limited (429), skip this attempt and wait the next interval
+      if (rpcResponse.status === 429) continue;
+
+      rpcResult = await rpcResponse.json() as typeof rpcResult;
+    } catch {
+      // Network error during poll — skip and retry
+      continue;
+    }
 
     const result = rpcResult.result;
 
@@ -167,10 +189,9 @@ async function pollTransaction(
       throw new Error(`Transaction failed on-chain: ${result.errorResultXdr || "unknown error"}`);
     }
 
-    // NOT_FOUND means still pending — keep polling
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    // NOT_FOUND → still pending, keep waiting
   }
 
-  // Exhausted polling attempts — transaction not yet confirmed
-  throw new Error("Transaction confirmation timed out. It may still be pending — check your balance in a moment.");
+  // Timed out — return PENDING so frontend shows success with hash
+  return { status: "PENDING", pending: true };
 }

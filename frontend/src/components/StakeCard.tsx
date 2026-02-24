@@ -7,7 +7,7 @@ import { NETWORK } from '../config/contracts';
 
 export default function StakeCard() {
   const { isConnected, connect, publicKey } = useWallet();
-  const { stake, isStaking, error, lastTxHash, clearError, balance } = useStaking();
+  const { stake, isStaking, isPending, error, lastTxHash, clearError, balance } = useStaking();
   const { stats, apy } = useProtocol();
   const [xlmAmount, setXlmAmount] = useState('');
 
@@ -99,14 +99,18 @@ export default function StakeCard() {
       )}
 
       {lastTxHash && (
-        <div className="banner-success space-y-1">
-          <p className="text-xs text-green-400">Staked successfully — sXLM minted to your wallet</p>
+        <div className={isPending ? "banner-warning space-y-1" : "banner-success space-y-1"}>
+          <p className={`text-xs ${isPending ? 'text-yellow-400' : 'text-green-400'}`}>
+            {isPending
+              ? 'Transaction submitted — confirming on Stellar (may take a moment)'
+              : 'Staked successfully — sXLM minted to your wallet'}
+          </p>
           <a
             href={`https://stellar.expert/explorer/public/tx/${lastTxHash}`}
             target="_blank"
             rel="noopener noreferrer"
             className="block text-[10px] font-mono truncate"
-            style={{ color: '#4ade80', opacity: 0.7 }}
+            style={{ color: isPending ? '#F5CF00' : '#4ade80', opacity: 0.7 }}
           >
             {lastTxHash}
           </a>

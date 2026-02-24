@@ -19,6 +19,7 @@ interface StakingState {
   isClaiming: boolean;
   error: string | null;
   lastTxHash: string | null;
+  isPending: boolean;
 }
 
 interface BalanceInfo {
@@ -39,6 +40,7 @@ interface PendingWithdrawal {
 }
 
 interface UseStakingReturn extends StakingState {
+  isPending: boolean;
   stake: (xlmAmount: number) => Promise<boolean>;
   unstake: (sxlmAmount: number, instant?: boolean) => Promise<boolean>;
   claimWithdrawal: (withdrawalId: string) => Promise<boolean>;
@@ -57,6 +59,7 @@ export function useStaking(): UseStakingReturn {
     isClaiming: false,
     error: null,
     lastTxHash: null,
+    isPending: false,
   });
   const [pendingWithdrawals, setPendingWithdrawals] = useState<PendingWithdrawal[]>([]);
   const [balance, setBalance] = useState<BalanceInfo>({ sxlmBalance: 0, xlmValue: 0, exchangeRate: 1, xlmNativeBalance: 0 });
@@ -163,12 +166,14 @@ export function useStaking(): UseStakingReturn {
             ...prev,
             isStaking: false,
             lastTxHash: submitData.txHash,
+            isPending: submitData.pending ?? false,
           }));
         } else {
           setState((prev) => ({
             ...prev,
             isStaking: false,
             lastTxHash: txData.txHash || null,
+            isPending: false,
           }));
         }
 
@@ -217,12 +222,14 @@ export function useStaking(): UseStakingReturn {
             ...prev,
             isUnstaking: false,
             lastTxHash: submitData.txHash,
+            isPending: submitData.pending ?? false,
           }));
         } else {
           setState((prev) => ({
             ...prev,
             isUnstaking: false,
             lastTxHash: txData.txHash || null,
+            isPending: false,
           }));
         }
 

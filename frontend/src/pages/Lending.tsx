@@ -11,6 +11,7 @@ export default function Lending() {
     stats,
     isLoading,
     isSubmitting,
+    isPending,
     error,
     lastTxHash,
     depositCollateral,
@@ -202,8 +203,19 @@ export default function Lending() {
           )}
 
           {lastTxHash && (
-            <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-3">
-              <p className="text-xs text-green-400">Transaction successful!</p>
+            <div className={`rounded-lg p-3 space-y-1 ${isPending ? 'bg-yellow-500/10 border border-yellow-500/20' : 'bg-green-500/10 border border-green-500/20'}`}>
+              <p className={`text-xs ${isPending ? 'text-yellow-400' : 'text-green-400'}`}>
+                {isPending ? 'Transaction submitted — confirming on Stellar (may take a moment)' : 'Transaction successful!'}
+              </p>
+              <a
+                href={`https://stellar.expert/explorer/public/tx/${lastTxHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block text-[10px] font-mono truncate"
+                style={{ color: isPending ? '#F5CF00' : '#4ade80', opacity: 0.7 }}
+              >
+                {lastTxHash}
+              </a>
             </div>
           )}
 
