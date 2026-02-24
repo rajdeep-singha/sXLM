@@ -74,14 +74,14 @@ export default function Lending() {
       {/* Protocol Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
+          { label: 'Available Liquidity', value: formatXLM(stats.poolBalance) + ' XLM', highlight: true },
           { label: 'Total Collateral', value: formatXLM(stats.totalCollateral) + ' sXLM' },
-          { label: 'Total Borrowed', value: formatXLM(stats.totalBorrowed) + ' XLM' },
           { label: 'Collateral Factor', value: (stats.collateralFactorBps / 100) + '%' },
           { label: 'Borrow Rate', value: (stats.borrowRateBps / 100) + '% APR' },
         ].map((stat) => (
           <div key={stat.label} className="glass rounded-xl p-4 text-center">
             <p className="text-xs text-gray-400">{stat.label}</p>
-            <p className="text-lg font-bold text-white mt-1">{stat.value}</p>
+            <p className={`text-lg font-bold mt-1 ${stat.highlight ? 'text-yellow-400' : 'text-white'}`}>{stat.value}</p>
           </div>
         ))}
       </div>
@@ -200,7 +200,7 @@ export default function Lending() {
             <button
               onClick={handleSubmit}
               disabled={isSubmitting || (activeTab === 'liquidate' ? !borrowerAddress : (!amount || parseFloat(amount) <= 0))}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 text-white font-semibold hover:opacity-90 transition-opacity disabled:opacity-40"
+              className="w-full py-3 rounded-xl font-semibold hover:opacity-90 transition-opacity disabled:opacity-40 text-black" style={{ background: '#F5CF00' }}
             >
               {isSubmitting ? 'Processing...' : buttonLabels[activeTab]}
             </button>

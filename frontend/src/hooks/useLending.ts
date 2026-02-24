@@ -13,6 +13,7 @@ interface LendingPosition {
 interface LendingStats {
   totalCollateral: number;
   totalBorrowed: number;
+  poolBalance: number;
   collateralFactorBps: number;
   liquidationThresholdBps: number;
   borrowRateBps: number;
@@ -45,6 +46,7 @@ const DEFAULT_POSITION: LendingPosition = {
 const DEFAULT_STATS: LendingStats = {
   totalCollateral: 0,
   totalBorrowed: 0,
+  poolBalance: 0,
   collateralFactorBps: 7000,
   liquidationThresholdBps: 8000,
   borrowRateBps: 500,
