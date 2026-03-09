@@ -3,14 +3,12 @@ import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import { config } from "../config/index.js";
 import { StakingEngine } from "../staking-engine/index.js";
-import { ValidatorService } from "../validator-service/index.js";
 import { RewardEngine } from "../reward-engine/index.js";
 import { UserService } from "../user-service/index.js";
 import { PrismaClient } from "@prisma/client";
 import { stakeRoutes } from "./routes/stake.js";
 import { unstakeRoutes } from "./routes/unstake.js";
 import { submitRoutes } from "./routes/submit.js";
-import { validatorRoutes } from "./routes/validators.js";
 import { statsRoutes } from "./routes/stats.js";
 import { apyRoutes } from "./routes/apy.js";
 import { withdrawalRoutes } from "./routes/withdrawals.js";
@@ -25,7 +23,6 @@ import { governanceRoutes } from "./routes/governance.js";
 export interface GatewayDeps {
   prisma: PrismaClient;
   stakingEngine: StakingEngine;
-  validatorService: ValidatorService;
   rewardEngine: RewardEngine;
   userService: UserService;
 }
@@ -35,8 +32,12 @@ export async function startApiGateway(deps: GatewayDeps) {
 
   await fastify.register(cors, { origin: true });
   await fastify.register(rateLimit, {
-    max: 500,
+    max: 200,
     timeWindow: "1 minute",
+    // Use X-Forwarded-For so Render's proxy doesn't collapse all IPs into one
+    keyGenerator: (request) =>
+      (request.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ??
+      request.ip,
   });
 
   // Decorate request with wallet field for auth
@@ -52,11 +53,6 @@ export async function startApiGateway(deps: GatewayDeps) {
   await fastify.register(authRoutes, { prefix: "/api" });
 
   // Public read-only routes
-  await fastify.register(validatorRoutes, {
-    validatorService: deps.validatorService,
-    prisma: deps.prisma,
-    prefix: "/api",
-  });
   await fastify.register(statsRoutes, {
     prisma: deps.prisma,
     stakingEngine: deps.stakingEngine,
@@ -64,6 +60,7 @@ export async function startApiGateway(deps: GatewayDeps) {
   });
   await fastify.register(apyRoutes, {
     rewardEngine: deps.rewardEngine,
+    stakingEngine: deps.stakingEngine,
     prefix: "/api",
   });
 

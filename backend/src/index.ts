@@ -1,7 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { initEventBus, shutdownEventBus } from "./event-bus/index.js";
 import { StakingEngine } from "./staking-engine/index.js";
-import { ValidatorService } from "./validator-service/index.js";
 import { RewardEngine } from "./reward-engine/index.js";
 import { RiskEngine } from "./risk-engine/index.js";
 import { EventListenerService } from "./event-listener/index.js";
@@ -28,7 +27,6 @@ async function main() {
 
   // Initialize services
   const stakingEngine = new StakingEngine(prisma);
-  const validatorService = new ValidatorService(prisma);
   const rewardEngine = new RewardEngine(prisma);
   const riskEngine = new RiskEngine(prisma);
   const eventListener = new EventListenerService(prisma);
@@ -37,7 +35,6 @@ async function main() {
   const keeperBot = new KeeperBot();
 
   await stakingEngine.initialize();
-  await validatorService.initialize();
   await rewardEngine.initialize();
   await riskEngine.initialize();
   await eventListener.initialize();
@@ -49,7 +46,6 @@ async function main() {
   const server = await startApiGateway({
     prisma,
     stakingEngine,
-    validatorService,
     rewardEngine,
     userService,
   });
@@ -61,7 +57,6 @@ async function main() {
     console.log("\nShutting down...");
     await server.close();
     await stakingEngine.shutdown();
-    await validatorService.shutdown();
     await rewardEngine.shutdown();
     await riskEngine.shutdown();
     await eventListener.shutdown();

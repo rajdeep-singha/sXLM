@@ -1,0 +1,1 @@
+{"version":3,"file":"apy.d.ts","sourceRoot":"","sources":["../../../src/api-gateway/routes/apy.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,kBAAkB,EAAE,MAAM,SAAS,CAAC;AAC7C,OAAO,EAAE,YAAY,EAAE,MAAM,8BAA8B,CAAC;AAE5D,eAAO,MAAM,SAAS,EAAE,kBAAkB,CAAC;IAAE,YAAY,EAAE,YAAY,CAAA;CAAE,CA4ExE,CAAC"}

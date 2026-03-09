@@ -22,6 +22,11 @@ const liquidateSchema = z.object({
   borrowerAddress: z.string().min(56).max(56),
 });
 
+// Higher inclusion fee to avoid txINSUFFICIENT_FEE when simulation
+// slightly underestimates resource costs. assembleTransaction adds
+// minResourceFee on top of this, so the total is well above the minimum.
+const SOROBAN_FEE = "2000000"; // 0.2 XLM
+
 async function buildContractTx(
   server: rpc.Server,
   contractId: string,
@@ -34,7 +39,7 @@ async function buildContractTx(
 
   const account = await server.getAccount(userAddress);
   const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
+    fee: SOROBAN_FEE,
     networkPassphrase: config.stellar.networkPassphrase,
   })
     .addOperation(op)

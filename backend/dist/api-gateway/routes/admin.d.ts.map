@@ -1,0 +1,1 @@
+{"version":3,"file":"admin.d.ts","sourceRoot":"","sources":["../../../src/api-gateway/routes/admin.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,kBAAkB,EAAE,MAAM,SAAS,CAAC;AAG7C,OAAO,EAAE,aAAa,EAAE,MAAM,+BAA+B,CAAC;AAE9D;;;GAGG;AACH,eAAO,MAAM,WAAW,EAAE,kBAAkB,CAAC;IAAE,aAAa,EAAE,aAAa,CAAA;CAAE,CAmE5E,CAAC"}

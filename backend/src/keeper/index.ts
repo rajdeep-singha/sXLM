@@ -26,15 +26,25 @@ import {
   BASE_FEE,
 } from "@stellar/stellar-sdk";
 import { config } from "../config/index.js";
-import { callAddRewards } from "../staking-engine/contractClient.js";
+import {
+  callAddRewards,
+  callWithdrawFees,
+  callCollectProtocolFees,
+  getLpAccruedProtocolFees,
+  getTreasuryBalance,
+} from "../staking-engine/contractClient.js";
 
 const KEEPER_INTERVAL_MS = 6 * 60 * 60 * 1000;      // 6 hours
 const TTL_BUMP_INTERVAL_MS = 24 * 60 * 60 * 1000;    // 24 hours
 const RECALIBRATE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+const TREASURY_RECYCLE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const TREASURY_RECYCLE_THRESHOLD = BigInt(100_0000000);   // 100 XLM in stroops
+
 let keeperInterval: ReturnType<typeof setInterval> | null = null;
 let ttlInterval: ReturnType<typeof setInterval> | null = null;
 let recalibrateInterval: ReturnType<typeof setInterval> | null = null;
+let treasuryRecycleInterval: ReturnType<typeof setInterval> | null = null;
 
 export class KeeperBot {
   private server: rpc.Server;
@@ -81,6 +91,15 @@ export class KeeperBot {
       }
     }, RECALIBRATE_INTERVAL_MS);
 
+    // Schedule treasury recycling every 24h
+    treasuryRecycleInterval = setInterval(async () => {
+      try {
+        await this.recycleTreasury();
+      } catch (err) {
+        console.error("[KeeperBot] Treasury recycle error:", err);
+      }
+    }, TREASURY_RECYCLE_INTERVAL_MS);
+
     console.log(
       `[KeeperBot] Running — harvest every ${KEEPER_INTERVAL_MS / 3_600_000}h, TTL bump every ${TTL_BUMP_INTERVAL_MS / 3_600_000}h`
     );
@@ -90,6 +109,7 @@ export class KeeperBot {
     if (keeperInterval) { clearInterval(keeperInterval); keeperInterval = null; }
     if (ttlInterval) { clearInterval(ttlInterval); ttlInterval = null; }
     if (recalibrateInterval) { clearInterval(recalibrateInterval); recalibrateInterval = null; }
+    if (treasuryRecycleInterval) { clearInterval(treasuryRecycleInterval); treasuryRecycleInterval = null; }
     console.log("[KeeperBot] Shut down");
   }
 
@@ -103,39 +123,50 @@ export class KeeperBot {
     // Step 1: Check how much interest has accrued on the lending contract
     const pendingInterest = await this.queryLendingAccruedInterest();
 
-    if (pendingInterest <= BigInt(0)) {
-      console.log("[KeeperBot] No interest to harvest");
-      return;
-    }
+    // Log LP pool stats for transparency
+    await this.logLpPoolStats();
 
-    console.log(
-      `[KeeperBot] Pending interest: ${Number(pendingInterest) / 1e7} XLM`
-    );
-
-    // Step 2: Call harvest_interest() on lending contract
-    // This transfers the XLM from lending pool → admin wallet
-    const harvested = await this.harvestLendingInterest(pendingInterest);
-
-    if (harvested <= BigInt(0)) {
-      console.log("[KeeperBot] harvest_interest returned 0 — skipping add_rewards");
-      return;
-    }
-
-    console.log(`[KeeperBot] Harvested ${Number(harvested) / 1e7} XLM from lending`);
-
-    // Step 3: Call add_rewards() on staking contract with harvested amount
-    // This raises the sXLM exchange rate for all stakers
+    // Step 2: Collect LP protocol fees
+    let lpProtocolFees = BigInt(0);
     try {
-      await callAddRewards(harvested);
+      const accrued = await getLpAccruedProtocolFees();
+      if (accrued > BigInt(0)) {
+        await callCollectProtocolFees();
+        lpProtocolFees = accrued;
+        console.log(`[KeeperBot] Collected ${Number(lpProtocolFees) / 1e7} XLM in LP protocol fees`);
+      }
+    } catch (err) {
+      console.warn("[KeeperBot] LP protocol fee collection failed:", err);
+    }
+
+    // Step 3: Harvest lending interest
+    let harvested = BigInt(0);
+    if (pendingInterest > BigInt(0)) {
       console.log(
-        `[KeeperBot] add_rewards called with ${Number(harvested) / 1e7} XLM — sXLM rate will increase`
+        `[KeeperBot] Pending interest: ${Number(pendingInterest) / 1e7} XLM`
+      );
+      harvested = await this.harvestLendingInterest(pendingInterest);
+      if (harvested > BigInt(0)) {
+        console.log(`[KeeperBot] Harvested ${Number(harvested) / 1e7} XLM from lending`);
+      }
+    }
+
+    // Step 4: Pipe total yield to add_rewards
+    const totalYield = harvested + lpProtocolFees;
+    if (totalYield <= BigInt(0)) {
+      console.log("[KeeperBot] No yield to distribute");
+      return;
+    }
+
+    try {
+      await callAddRewards(totalYield);
+      console.log(
+        `[KeeperBot] add_rewards called with ${Number(totalYield) / 1e7} XLM (lending: ${Number(harvested) / 1e7}, LP fees: ${Number(lpProtocolFees) / 1e7}) — sXLM rate will increase`
       );
     } catch (err) {
       console.error("[KeeperBot] add_rewards failed:", err);
-      // NOTE: Harvested XLM is now in admin wallet. Admin must manually call
-      // add_rewards if this fails. Log for visibility.
       console.error(
-        `[KeeperBot] MANUAL ACTION REQUIRED: call add_rewards with ${harvested} stroops`
+        `[KeeperBot] MANUAL ACTION REQUIRED: call add_rewards with ${totalYield} stroops`
       );
     }
   }
@@ -223,6 +254,62 @@ export class KeeperBot {
       console.log("[KeeperBot] Staking rate recalibrated");
     } catch (err) {
       console.error("[KeeperBot] Recalibrate failed:", err);
+    }
+  }
+
+  // ============================================================
+  // LP Pool stats logging (fees go to LPs via constant product k growth)
+  // ============================================================
+
+  private async logLpPoolStats(): Promise<void> {
+    try {
+      const reserves = await this.simulateView(
+        config.contracts.lpPoolContractId,
+        "get_reserves",
+        []
+      );
+
+      const arr = reserves as [string | number | bigint, string | number | bigint] | null;
+      const xlm = Number(arr?.[0] ?? 0) / 1e7;
+      const sxlm = Number(arr?.[1] ?? 0) / 1e7;
+      const k = xlm * sxlm;
+
+      const accruedFees = await getLpAccruedProtocolFees().catch(() => BigInt(0));
+
+      console.log(
+        `[KeeperBot] LP Pool: reserve_xlm=${xlm.toFixed(2)}, reserve_sxlm=${sxlm.toFixed(2)}, k=${k.toFixed(2)}, accrued_protocol_fees=${Number(accruedFees) / 1e7} XLM`
+      );
+    } catch (err) {
+      console.warn("[KeeperBot] Could not query LP pool stats:", err);
+    }
+  }
+
+  // ============================================================
+  // Treasury recycling: withdraw protocol fees and pipe back as rewards
+  // ============================================================
+
+  async recycleTreasury(): Promise<void> {
+    try {
+      const treasuryBal = await getTreasuryBalance();
+
+      if (treasuryBal < TREASURY_RECYCLE_THRESHOLD) {
+        console.log(
+          `[KeeperBot] Treasury balance ${Number(treasuryBal) / 1e7} XLM below threshold (${Number(TREASURY_RECYCLE_THRESHOLD) / 1e7} XLM) — skipping recycle`
+        );
+        return;
+      }
+
+      console.log(`[KeeperBot] Recycling treasury: ${Number(treasuryBal) / 1e7} XLM`);
+
+      await callWithdrawFees(treasuryBal);
+      console.log(`[KeeperBot] Withdrew ${Number(treasuryBal) / 1e7} XLM from treasury`);
+
+      await callAddRewards(treasuryBal);
+      console.log(
+        `[KeeperBot] Recycled ${Number(treasuryBal) / 1e7} XLM treasury → add_rewards — stakers get ~100% of yield`
+      );
+    } catch (err) {
+      console.error("[KeeperBot] Treasury recycle failed:", err);
     }
   }
 

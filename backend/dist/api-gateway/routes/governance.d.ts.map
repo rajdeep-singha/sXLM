@@ -1,0 +1,1 @@
+{"version":3,"file":"governance.d.ts","sourceRoot":"","sources":["../../../src/api-gateway/routes/governance.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,kBAAkB,EAAE,MAAM,SAAS,CAAC;AAY7C,OAAO,EAAE,YAAY,EAAE,MAAM,gBAAgB,CAAC;AAyF9C,eAAO,MAAM,gBAAgB,EAAE,kBAAkB,CAAC;IAAE,MAAM,EAAE,YAAY,CAAA;CAAE,CA6VzE,CAAC"}

@@ -11,6 +11,13 @@ import {
 } from "@stellar/stellar-sdk";
 import { config } from "../../config/index.js";
 import { PrismaClient } from "@prisma/client";
+import {
+  callSetCooldownPeriod,
+  callUpdateCollateralFactor,
+  callUpdateBorrowRate,
+  callUpdateLiquidationThreshold,
+  callSetLpProtocolFeeBps,
+} from "../../staking-engine/contractClient.js";
 
 const createProposalSchema = z.object({
   userAddress: z.string().min(56).max(56),
@@ -97,6 +104,47 @@ async function queryContractView(
     return scValToNative(simResult.result.retval);
   }
   return null;
+}
+
+/**
+ * Apply a governance parameter change to the relevant contract.
+ * Called after a proposal is successfully executed on-chain.
+ */
+async function applyGovernanceParam(paramKey: string, newValue: string): Promise<void> {
+  const value = parseInt(newValue, 10);
+  if (isNaN(value)) {
+    console.warn(`[Governance] Cannot apply param "${paramKey}": invalid value "${newValue}"`);
+    return;
+  }
+
+  try {
+    switch (paramKey) {
+      case "cooldown_period":
+        await callSetCooldownPeriod(value);
+        console.log(`[Governance] Applied cooldown_period = ${value}`);
+        break;
+      case "collateral_factor":
+        await callUpdateCollateralFactor(value);
+        console.log(`[Governance] Applied collateral_factor = ${value} bps`);
+        break;
+      case "borrow_rate_bps":
+        await callUpdateBorrowRate(value);
+        console.log(`[Governance] Applied borrow_rate_bps = ${value}`);
+        break;
+      case "liquidation_threshold":
+        await callUpdateLiquidationThreshold(value);
+        console.log(`[Governance] Applied liquidation_threshold = ${value} bps`);
+        break;
+      case "lp_protocol_fee_bps":
+        await callSetLpProtocolFeeBps(value);
+        console.log(`[Governance] Applied lp_protocol_fee_bps = ${value}`);
+        break;
+      default:
+        console.log(`[Governance] Param "${paramKey}" does not map to a contract call — governance-only param`);
+    }
+  } catch (err) {
+    console.error(`[Governance] Failed to apply param "${paramKey}" = "${newValue}":`, err);
+  }
 }
 
 export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = async (
@@ -205,7 +253,7 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
         body.userAddress
       );
 
-      // Update DB status
+      // Update DB status and apply the parameter change
       const dbProposal = await prisma.governanceProposal.findFirst({
         where: { id: body.proposalId + 1 }, // DB is 1-indexed
       });
@@ -214,6 +262,9 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
           where: { id: dbProposal.id },
           data: { status: "executed" },
         });
+
+        // Apply the governance parameter to the relevant contract
+        await applyGovernanceParam(dbProposal.paramKey, dbProposal.newValue);
       }
 
       return result;
@@ -423,6 +474,9 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
       { key: "protocol_fee_bps", defaultValue: "1000", description: "Protocol fee in basis points (10% = 1000)" },
       { key: "cooldown_period", defaultValue: "17280", description: "Withdrawal cooldown in ledgers (~24h)" },
       { key: "collateral_factor", defaultValue: "7000", description: "Lending collateral factor in bps (70%)" },
+      { key: "borrow_rate_bps", defaultValue: "400", description: "Lending borrow rate in basis points (4% = 400)" },
+      { key: "liquidation_threshold", defaultValue: "8000", description: "Liquidation threshold in bps (80% = 8000)" },
+      { key: "lp_protocol_fee_bps", defaultValue: "5", description: "LP pool protocol fee in basis points (5 = 0.05% of swap input)" },
       { key: "buffer_safety_factor", defaultValue: "250", description: "Liquidity buffer safety factor (2.5x)" },
     ];
 

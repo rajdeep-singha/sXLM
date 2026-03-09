@@ -54,7 +54,7 @@ export const stakeRoutes: FastifyPluginAsync<{ stakingEngine: StakingEngine }> =
 
       const account = await server.getAccount(body.userAddress);
       const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
+        fee: "2000000", // 0.2 XLM — assembleTransaction adds minResourceFee on top
         networkPassphrase: config.stellar.networkPassphrase,
       })
         .addOperation(depositOp)

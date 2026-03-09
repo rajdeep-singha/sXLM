@@ -93,7 +93,7 @@ async function buildRestoreTx(
   // Build RestoreFootprint tx using the preamble returned by the RPC
   const restoreAccount = await server.getAccount(userAddress);
   const restoreTx = new TransactionBuilder(restoreAccount, {
-    fee: String(Number(BASE_FEE) + Number(simResult.restorePreamble.minResourceFee)),
+    fee: String(2_000_000 + Number(simResult.restorePreamble.minResourceFee)),
     networkPassphrase: config.stellar.networkPassphrase,
   })
     .addOperation(Operation.restoreFootprint({}))
@@ -206,7 +206,7 @@ export const unstakeRoutes: FastifyPluginAsync<{ stakingEngine: StakingEngine; p
 
       const account = await server.getAccount(body.userAddress);
       const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
+        fee: "2000000", // 0.2 XLM — assembleTransaction adds minResourceFee on top
         networkPassphrase: config.stellar.networkPassphrase,
       })
         .addOperation(withdrawOp)

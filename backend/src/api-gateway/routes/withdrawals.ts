@@ -39,6 +39,25 @@ export const withdrawalRoutes: FastifyPluginAsync<{ userService: UserService }> 
   });
 
   /**
+   * POST /staking/withdrawals/mark-claimed
+   * Mark a withdrawal as claimed after successful on-chain claim.
+   */
+  fastify.post("/staking/withdrawals/mark-claimed", async (request, reply) => {
+    try {
+      const body = z.object({
+        wallet: z.string().min(56).max(56),
+        withdrawalId: z.string(),
+      }).parse(request.body);
+
+      await userService.markWithdrawalClaimed(body.wallet, Number(body.withdrawalId));
+      return { success: true };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to update withdrawal";
+      reply.status(400).send({ error: message });
+    }
+  });
+
+  /**
    * GET /withdrawals (query param version — backwards compat)
    */
   fastify.get("/withdrawals", async (request, reply) => {

@@ -103,7 +103,7 @@ export class LeverageEngine {
    * Calculate optimal leverage for given rates.
    */
   optimal(
-    stakingAPR: number = 0.06,
+    stakingAPR: number = 0,
     borrowAPR: number = 0.04,
     collateralFactor: number = 0.7
   ): OptimalLeverageResult {

@@ -61,7 +61,7 @@ export class RestakingEngine {
     principal: number,
     loops: number,
     collateralFactor: number = 0.7,
-    stakingAPR: number = 0.06,
+    stakingAPR: number = 0,
     borrowAPR: number = 0.04
   ): RestakingSimulationResult {
     const steps: RestakingLoopStep[] = [];

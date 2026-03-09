@@ -9,51 +9,78 @@ export const statsRoutes: FastifyPluginAsync<{
   const { prisma, stakingEngine } = opts;
 
   /**
+   * GET /chart-data
+   * Returns historical time-series data for frontend charts.
+   */
+  fastify.get<{ Querystring: { days?: string } }>("/chart-data", async (request) => {
+    try {
+      const days = parseInt(request.query.days || "90", 10);
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+      const snapshots = await prisma.rewardSnapshot.findMany({
+        where: { timestamp: { gte: since } },
+        orderBy: { timestamp: "asc" },
+        select: { timestamp: true, exchangeRate: true, apy: true, totalStaked: true },
+      });
+
+      return {
+        apyHistory: snapshots.map((s) => ({ timestamp: s.timestamp.toISOString(), value: s.apy * 100 })),
+        exchangeRateHistory: snapshots.map((s) => ({ timestamp: s.timestamp.toISOString(), value: s.exchangeRate })),
+        totalStakedHistory: snapshots.map((s) => ({ timestamp: s.timestamp.toISOString(), value: Number(s.totalStaked) / 1e7 })),
+        tvlHistory: snapshots.map((s) => ({ timestamp: s.timestamp.toISOString(), value: (Number(s.totalStaked) / 1e7) * 0.12 })),
+      };
+    } catch {
+      return { apyHistory: [], exchangeRateHistory: [], totalStakedHistory: [], tvlHistory: [] };
+    }
+  });
+
+  /**
    * GET /protocol-stats
    * Returns protocol metrics matching the frontend ProtocolStats interface.
    */
   fastify.get("/protocol-stats", async () => {
-    try {
-      const [metrics, protocolStats, validatorCount] = await Promise.all([
-        prisma.protocolMetrics.findFirst({ orderBy: { updatedAt: "desc" } }),
-        stakingEngine.getProtocolStats(),
-        prisma.validator.count(),
-      ]);
+    // Use Promise.allSettled so individual RPC failures don't break the whole response
+    const [metricsResult, statsResult] = await Promise.allSettled([
+      prisma.protocolMetrics.findFirst({ orderBy: { updatedAt: "desc" } }),
+      stakingEngine.getProtocolStats(),
+    ]);
 
-      const totalStakedXlm = Number(protocolStats.totalStaked) / 1e7;
-      const totalSxlmSupply = Number(protocolStats.totalSupply) / 1e7;
+    const metrics = metricsResult.status === "fulfilled" ? metricsResult.value : null;
 
-      return {
-        totalStaked: totalStakedXlm,
-        totalSxlmSupply,
-        exchangeRate: protocolStats.exchangeRate,
-        tvlUsd: metrics?.tvlUsd ?? 0,
-        totalStakers: 0,
-        totalValidators: validatorCount,
-        xlmPrice: metrics?.tvlUsd && totalStakedXlm > 0
-          ? metrics.tvlUsd / totalStakedXlm
-          : 0.12,
-        liquidityBuffer: Number(protocolStats.liquidityBuffer) / 1e7,
-        avgValidatorScore: metrics?.avgValidatorScore ?? 0,
-        treasuryBalance: Number(protocolStats.treasuryBalance) / 1e7,
-        isPaused: protocolStats.isPaused,
-        protocolFeePct: protocolStats.protocolFeeBps / 100,
-      };
-    } catch {
-      return {
-        totalStaked: 0,
-        totalSxlmSupply: 0,
-        exchangeRate: 1,
-        tvlUsd: 0,
-        totalStakers: 0,
-        totalValidators: 0,
-        xlmPrice: 0.12,
-        liquidityBuffer: 0,
-        avgValidatorScore: 0,
-        treasuryBalance: 0,
-        isPaused: false,
-        protocolFeePct: 10,
-      };
+    // If full stats call failed, still try to get just the exchange rate
+    let protocolStats: Awaited<ReturnType<typeof stakingEngine.getProtocolStats>> | null = null;
+    if (statsResult.status === "fulfilled") {
+      protocolStats = statsResult.value;
     }
+
+    // Always try to get a real exchange rate even if getProtocolStats failed
+    let exchangeRate = protocolStats?.exchangeRate ?? 1;
+    if (!protocolStats) {
+      try {
+        exchangeRate = await stakingEngine.getExchangeRate();
+      } catch {
+        // last resort fallback
+      }
+    }
+
+    const totalStakedXlm = protocolStats ? Number(protocolStats.totalStaked) / 1e7 : 0;
+    const totalSxlmSupply = protocolStats ? Number(protocolStats.totalSupply) / 1e7 : 0;
+
+    return {
+      totalStaked: totalStakedXlm,
+      totalSxlmSupply,
+      exchangeRate,
+      tvlUsd: metrics?.tvlUsd ?? 0,
+      totalStakers: 0,
+      totalValidators: 0,
+      xlmPrice: metrics?.tvlUsd && totalStakedXlm > 0
+        ? metrics.tvlUsd / totalStakedXlm
+        : 0.12,
+      liquidityBuffer: protocolStats ? Number(protocolStats.liquidityBuffer) / 1e7 : 0,
+      avgValidatorScore: metrics?.avgValidatorScore ?? 0,
+      treasuryBalance: protocolStats ? Number(protocolStats.treasuryBalance) / 1e7 : 0,
+      isPaused: protocolStats?.isPaused ?? false,
+      protocolFeePct: protocolStats ? protocolStats.protocolFeeBps / 100 : 10,
+    };
   });
 };

@@ -1,15 +1,11 @@
 import { PrismaClient } from "@prisma/client";
-import { getTotalStaked, getTotalSupply, callAddRewards, callUpdateLendingExchangeRate } from "../staking-engine/contractClient.js";
+import { getTotalStaked, getTotalSupply, callUpdateLendingExchangeRate } from "../staking-engine/contractClient.js";
 import { computeExchangeRate } from "../staking-engine/exchangeRateManager.js";
 import { getEventBus, EventType } from "../event-bus/index.js";
 import { config } from "../config/index.js";
 
 let snapshotInterval: ReturnType<typeof setInterval> | null = null;
 let rewardDistributionInterval: ReturnType<typeof setInterval> | null = null;
-
-// Reward distribution constants
-const BASE_APR = 0.06; // 6% base APR for Stellar validators
-const REWARD_DISTRIBUTION_INTERVAL_MS = 6 * 60 * 60 * 1000; // Every 6 hours
 
 export class RewardEngine {
   private prisma: PrismaClient;
@@ -53,93 +49,6 @@ export class RewardEngine {
       rewardDistributionInterval = null;
     }
     console.log("[RewardEngine] Shut down");
-  }
-
-  // Kept for manual/admin use only — not called automatically
-  // Real rewards come from KeeperBot harvesting lending interest
-
-  /**
-   * Distribute rewards by calling add_rewards on the staking contract.
-   *
-   * Calculates expected rewards based on:
-   *   reward = totalStaked × (APR / periodsPerYear)
-   *
-   * Uses weighted APR from active validators:
-   *   r_protocol = Σ(w_i × r_i) where w_i = allocatedStake_i / totalAllocated
-   */
-  async distributeRewards(): Promise<void> {
-    const totalStaked = await getTotalStaked();
-
-    if (totalStaked <= BigInt(0)) {
-      console.log("[RewardEngine] No stake to distribute rewards for");
-      return;
-    }
-
-    // Calculate weighted APR from validators
-    const validators = await this.prisma.validator.findMany({
-      where: {
-        uptime: { gte: config.protocol.validatorMinUptime },
-        allocatedStake: { gt: BigInt(0) },
-      },
-    });
-
-    let weightedAPR = BASE_APR;
-
-    if (validators.length > 0) {
-      const totalAllocated = validators.reduce(
-        (sum, v) => sum + Number(v.allocatedStake),
-        0
-      );
-
-      if (totalAllocated > 0) {
-        weightedAPR = 0;
-        for (const v of validators) {
-          const weight = Number(v.allocatedStake) / totalAllocated;
-          // Net APR after validator commission
-          const validatorAPR = BASE_APR * (1 - v.commission);
-          weightedAPR += weight * validatorAPR;
-        }
-      }
-    }
-
-    // Compound reward accrual: P_new = P × (1 + r/n)^1 - P
-    // where r = weighted APR, n = periods per year
-    // Each distribution is one period, so we compute one compounding step
-    const periodsPerYear = (365 * 24 * 60 * 60 * 1000) / REWARD_DISTRIBUTION_INTERVAL_MS;
-    const compoundedValue = Number(totalStaked) * Math.pow(1 + weightedAPR / periodsPerYear, 1);
-    const rewardAmount = BigInt(
-      Math.floor(compoundedValue - Number(totalStaked))
-    );
-
-    if (rewardAmount <= BigInt(0)) {
-      console.log("[RewardEngine] Reward amount too small to distribute");
-      return;
-    }
-
-    try {
-      await callAddRewards(rewardAmount);
-      console.log(
-        `[RewardEngine] Distributed ${Number(rewardAmount) / 1e7} XLM in rewards (weighted APR: ${(weightedAPR * 100).toFixed(2)}%)`
-      );
-
-      // Update protocol metrics with accumulated fees
-      // Protocol takes PROTOCOL_FEE_BPS (10%) of gross rewards
-      const protocolFee = rewardAmount * BigInt(1000) / BigInt(10000);
-      // Update the latest protocol metrics row only
-      const latestMetrics = await this.prisma.protocolMetrics.findFirst({
-        orderBy: { id: "desc" },
-      });
-      if (latestMetrics) {
-        await this.prisma.protocolMetrics.update({
-          where: { id: latestMetrics.id },
-          data: {
-            protocolFees: { increment: protocolFee },
-          },
-        });
-      }
-    } catch (err) {
-      console.error("[RewardEngine] Failed to distribute rewards on-chain:", err);
-    }
   }
 
   async takeSnapshot(): Promise<void> {
@@ -235,35 +144,43 @@ export class RewardEngine {
   }
 
   /**
-   * Returns the current validator-weighted net APR.
-   * This is what the reward engine actually distributes each period:
-   *   weightedAPR = Σ(w_i × BASE_APR × (1 - commission_i))
-   * Falls back to BASE_APR if no validators with stake are found.
+   * Derive APR purely from exchange rate history.
+   * APR = (currentRate / oldRate - 1) × (365 / daysDiff)
+   * Returns 0 if insufficient data (<24h of snapshots).
    */
-  async getWeightedAPR(): Promise<number> {
-    const validators = await this.prisma.validator.findMany({
-      where: {
-        uptime: { gte: config.protocol.validatorMinUptime },
-        allocatedStake: { gt: BigInt(0) },
-      },
-    });
+  async getDerivedAPR(): Promise<number> {
+    const now = Date.now();
+    // Try 30-day window first, fall back to 7-day
+    for (const days of [30, 7]) {
+      const since = new Date(now - days * 24 * 60 * 60 * 1000);
 
-    if (validators.length === 0) return BASE_APR;
+      const [oldest, latest] = await Promise.all([
+        this.prisma.rewardSnapshot.findFirst({
+          where: { timestamp: { gte: since } },
+          orderBy: { timestamp: "asc" },
+        }),
+        this.prisma.rewardSnapshot.findFirst({
+          orderBy: { timestamp: "desc" },
+        }),
+      ]);
 
-    const totalAllocated = validators.reduce(
-      (sum, v) => sum + Number(v.allocatedStake),
-      0
-    );
+      if (!oldest || !latest || oldest.id === latest.id) continue;
 
-    if (totalAllocated === 0) return BASE_APR;
+      const timeDiffMs = latest.timestamp.getTime() - oldest.timestamp.getTime();
+      const daysDiff = timeDiffMs / (24 * 60 * 60 * 1000);
 
-    let weightedAPR = 0;
-    for (const v of validators) {
-      const weight = Number(v.allocatedStake) / totalAllocated;
-      weightedAPR += weight * BASE_APR * (1 - v.commission);
+      // Require at least 24h of data
+      if (daysDiff < 1) continue;
+
+      const rateGrowth = latest.exchangeRate / oldest.exchangeRate - 1;
+      if (rateGrowth <= 0) return 0;
+
+      const apr = rateGrowth * (365 / daysDiff);
+      // Cap at 50% to filter nonsense
+      return Math.min(apr, 0.5);
     }
 
-    return weightedAPR;
+    return 0;
   }
 
   async getExchangeRateHistory(

@@ -7,7 +7,7 @@ const simulateSchema = z.object({
   principal: z.number().positive(),
   loops: z.number().int().min(1).max(20),
   collateralFactor: z.number().min(0.1).max(0.95).optional().default(0.7),
-  stakingAPR: z.number().min(0).max(1).optional().default(0.06),
+  stakingAPR: z.number().min(0).max(1).optional().default(0),
   borrowAPR: z.number().min(0).max(1).optional().default(0.04),
 });
 
