@@ -93,7 +93,7 @@ export default function Liquidity() {
         {/* User Position */}
         <div className="glass rounded-2xl p-6 space-y-4">
           <div className="flex items-center gap-2">
-            <Droplets className="w-5 h-5 text-primary-400" />
+            <Droplets className="w-5 h-5 text-yellow-400" />
             <h3 className="text-sm font-semibold text-white">Your LP Position</h3>
           </div>
           <div className="space-y-3">
@@ -125,7 +125,7 @@ export default function Liquidity() {
                 onClick={() => { setActiveTab(tab); setXlmAmount(''); setSxlmAmount(''); clearError(); }}
                 className={`flex-1 py-2 rounded-md text-sm font-medium transition-all ${
                   activeTab === tab
-                    ? 'bg-primary-500/20 text-white border border-primary-500/30'
+                    ? 'bg-yellow-400/10 text-white border border-yellow-400/20'
                     : 'text-gray-400 hover:text-white'
                 }`}
               >
@@ -139,7 +139,7 @@ export default function Liquidity() {
               <div className="flex justify-end">
                 <button
                   onClick={() => setSwapDirection(d => d === 'xlm-to-sxlm' ? 'sxlm-to-xlm' : 'xlm-to-sxlm')}
-                  className="text-xs text-primary-400 hover:text-primary-300 transition-colors"
+                  className="text-xs text-yellow-400 hover:text-yellow-300 transition-colors"
                 >
                   Switch direction
                 </button>
@@ -264,7 +264,7 @@ export default function Liquidity() {
       {/* AMM Info */}
       <div className="glass rounded-2xl p-6 space-y-4">
         <div className="flex items-center gap-2">
-          <TrendingUp className="w-5 h-5 text-primary-400" />
+          <TrendingUp className="w-5 h-5 text-yellow-400" />
           <h3 className="text-sm font-semibold text-white">About the Pool</h3>
         </div>
         <div className="space-y-2 text-sm text-gray-400">

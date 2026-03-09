@@ -82,7 +82,7 @@ export default function Restaking() {
         {/* Simulate Card */}
         <div className="glass rounded-2xl p-6 space-y-4">
           <div className="flex items-center gap-2">
-            <RefreshCw className="w-5 h-5 text-primary-400" />
+            <RefreshCw className="w-5 h-5 text-yellow-400" />
             <h3 className="text-sm font-semibold text-white">Simulate Restaking</h3>
           </div>
 
@@ -135,7 +135,7 @@ export default function Restaking() {
         {/* Results Card */}
         <div className="glass rounded-2xl p-6 space-y-4">
           <div className="flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-primary-400" />
+            <TrendingUp className="w-5 h-5 text-yellow-400" />
             <h3 className="text-sm font-semibold text-white">Results</h3>
           </div>
 
@@ -173,7 +173,7 @@ export default function Restaking() {
             </div>
           ) : position ? (
             <div className="space-y-3">
-              <p className="text-xs text-primary-400 font-semibold">Your Restaking Position</p>
+              <p className="text-xs text-yellow-400 font-semibold">Your Restaking Position</p>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-400">Total Staked</span>
                 <span className="text-white">{position.totalStaked.toFixed(2)} XLM</span>

@@ -81,36 +81,38 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const authenticateWithBackend = useCallback(async (wallet: string): Promise<string> => {
     const message = `sXLM Protocol Login: ${wallet} at ${Date.now()}`;
 
+    // Attempt to get a signature from Freighter for the auth message.
+    // In development/testnet the backend skips signature verification, so
+    // a failed signBlob is non-fatal — we fall back to an empty signature.
+    let signature = '';
     try {
-      // In v2, signMessage doesn't exist — use signBlob if available, otherwise SHA-256 fallback
       const freighterApi = await import('@stellar/freighter-api');
-
-      let signature = '';
       if ('signBlob' in freighterApi && typeof freighterApi.signBlob === 'function') {
         const encoder = new TextEncoder();
         const blob = encoder.encode(message);
         const blobB64 = btoa(String.fromCharCode(...blob));
         signature = await freighterApi.signBlob(blobB64, { accountToSign: wallet });
       } else {
-        // Fallback: hash-based signature for dev mode
         const encoder = new TextEncoder();
         const data = encoder.encode(message);
         const hashBuffer = await crypto.subtle.digest('SHA-256', data);
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         signature = btoa(String.fromCharCode(...hashArray));
       }
-
-      const { data } = await axios.post(`${API_BASE_URL}/api/auth/login`, {
-        wallet,
-        signature,
-        message,
-      });
-
-      return data.token;
-    } catch (err) {
-      console.error('[useWallet] Auth failed:', err);
-      throw new Error('Authentication failed. Please try again.');
+    } catch {
+      // signBlob rejected or not available — proceed with empty signature.
+      // Backend accepts this in dev/testnet mode.
     }
+
+    // Coerce to string — some Freighter versions return an object instead of a string
+    const safeSignature = typeof signature === 'string' ? signature : '';
+    const { data } = await axios.post(`${API_BASE_URL}/api/auth/login`, {
+      wallet,
+      signature: safeSignature,
+      message,
+    });
+
+    return data.token;
   }, []);
 
   const connect = useCallback(async () => {
@@ -136,7 +138,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         token = await authenticateWithBackend(wallet);
       } catch {
         token = '';
-        console.warn('[useWallet] Connected without JWT auth');
       }
 
       if (token) {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import axios from '../lib/apiClient';
 import { useWallet } from '../hooks/useWallet';
 import { useStaking } from '../hooks/useStaking';
@@ -7,12 +7,19 @@ import { API_BASE_URL } from '../config/contracts';
 
 export default function WithdrawCard() {
   const { isConnected, connect, publicKey, signTransaction } = useWallet();
-  const { unstake, claimWithdrawal, isUnstaking, isClaiming, pendingWithdrawals, error, clearError, balance, refreshBalance } = useStaking();
+  const { unstake, claimWithdrawal, isUnstaking, isClaiming, pendingWithdrawals, fetchPendingWithdrawals, error, clearError, balance, refreshBalance } = useStaking();
   const { stats } = useProtocol();
   const [sxlmAmount, setSxlmAmount] = useState('');
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [restoreSuccess, setRestoreSuccess] = useState(false);
+  const [txSuccess, setTxSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isConnected && publicKey) {
+      fetchPendingWithdrawals();
+    }
+  }, [isConnected, publicKey, fetchPendingWithdrawals]);
 
   const isArchived = (balance as { archived?: boolean }).archived === true
     || (error?.includes('ENTRY_ARCHIVED') ?? false)
@@ -26,8 +33,13 @@ export default function WithdrawCard() {
     if (!sxlmAmount || parseFloat(sxlmAmount) <= 0) return;
     clearError();
     setRestoreError(null);
+    setTxSuccess(null);
     const success = await unstake(parseFloat(sxlmAmount));
-    if (success) setSxlmAmount('');
+    if (success) {
+      setSxlmAmount('');
+      setTxSuccess(`Withdrawal of ${sxlmAmount} sXLM requested. It will appear in your pending withdrawals below.`);
+      await fetchPendingWithdrawals();
+    }
   };
 
   const handleRestore = async () => {
@@ -55,7 +67,14 @@ export default function WithdrawCard() {
 
   return (
     <div className="card p-6 space-y-4">
-      <h3 className="text-sm font-semibold">Withdraw</h3>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-white">Withdraw</h3>
+        {isConnected && balance.sxlmBalance > 0 && (
+          <span className="text-[10px]" style={{ color: '#525252' }}>
+            Balance: <span className="text-neutral-400">{balance.sxlmBalance.toFixed(4)} sXLM</span>
+          </span>
+        )}
+      </div>
 
       <div>
         <div className="flex justify-between items-center mb-1">
@@ -63,9 +82,12 @@ export default function WithdrawCard() {
           {isConnected && balance.sxlmBalance > 0 && (
             <button
               onClick={() => setSxlmAmount(balance.sxlmBalance.toFixed(7))}
-              className="text-[10px] text-neutral-500 hover:text-white"
+              className="text-[10px] transition-colors"
+              style={{ color: '#525252' }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = '#F5CF00')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = '#525252')}
             >
-              MAX: {balance.sxlmBalance.toFixed(4)}
+              MAX
             </button>
           )}
         </div>
@@ -79,19 +101,28 @@ export default function WithdrawCard() {
         />
       </div>
 
-      <div className="text-center text-neutral-600 text-xs">becomes</div>
-
-      <div className="bg-black rounded-lg p-4 border border-border">
-        <p className="label">You receive (XLM)</p>
-        <p className="font-mono text-lg">{xlmReceive}</p>
+      <div className="flex items-center justify-center gap-3 text-neutral-700 text-xs">
+        <div className="flex-1 h-px bg-border" />
+        <span>becomes</span>
+        <div className="flex-1 h-px bg-border" />
       </div>
 
-      <div className="flex gap-3 text-xs text-neutral-500">
-        <div className="flex-1 border border-border rounded-lg p-3">
+      <div
+        className="rounded-lg p-4"
+        style={{ background: '#080808', border: '1px solid #1e1e1e' }}
+      >
+        <p className="label">You receive (XLM)</p>
+        <p className="font-mono text-xl font-semibold" style={{ color: '#F5CF00' }}>
+          {xlmReceive}
+        </p>
+      </div>
+
+      <div className="flex gap-3 text-xs" style={{ color: '#525252' }}>
+        <div className="flex-1 rounded-lg p-3" style={{ border: '1px solid #1e1e1e' }}>
           <p className="text-neutral-400 font-medium">Instant</p>
           <p className="text-[10px] mt-0.5">If buffer available</p>
         </div>
-        <div className="flex-1 border border-border rounded-lg p-3">
+        <div className="flex-1 rounded-lg p-3" style={{ border: '1px solid #1e1e1e' }}>
           <p className="text-neutral-400 font-medium">Delayed</p>
           <p className="text-[10px] mt-0.5">~24h cooldown</p>
         </div>
@@ -99,8 +130,8 @@ export default function WithdrawCard() {
 
       {/* Archived / TTL expired banner */}
       {isConnected && isArchived && !restoreSuccess && (
-        <div className="border border-neutral-700 rounded-lg p-4 space-y-3">
-          <p className="text-xs text-neutral-300">
+        <div className="banner-warning space-y-3">
+          <p className="text-xs" style={{ color: '#ccc' }}>
             Your sXLM balance entry expired on testnet (TTL). Sign a free restore transaction to recover it.
           </p>
           {restoreError && <p className="text-xs text-red-400">{restoreError}</p>}
@@ -115,13 +146,19 @@ export default function WithdrawCard() {
       )}
 
       {restoreSuccess && (
-        <div className="border border-neutral-700 rounded-lg p-3">
-          <p className="text-xs text-neutral-300">Balance restored. You can now withdraw.</p>
+        <div className="banner-success">
+          <p className="text-xs text-green-400">Balance restored. You can now withdraw.</p>
+        </div>
+      )}
+
+      {txSuccess && (
+        <div className="banner-success">
+          <p className="text-xs text-green-400">{txSuccess}</p>
         </div>
       )}
 
       {error && !isArchived && (
-        <div className="border border-red-900 rounded-lg p-3">
+        <div className="banner-error">
           <p className="text-xs text-red-400">{error}</p>
         </div>
       )}
@@ -139,26 +176,37 @@ export default function WithdrawCard() {
       )}
 
       {pendingWithdrawals.length > 0 && (
-        <div className="pt-4 border-t border-border">
-          <h4 className="text-xs font-medium text-neutral-400 mb-3">Pending Withdrawals</h4>
+        <div className="pt-4" style={{ borderTop: '1px solid #1e1e1e' }}>
+          <h4 className="text-xs font-medium mb-3" style={{ color: '#525252' }}>Pending Withdrawals</h4>
           <div className="space-y-2">
-            {pendingWithdrawals.map((w: { id: string; amount: string; unlockTime: string; status: string }) => (
-              <div key={w.id} className="flex items-center justify-between bg-black rounded-lg p-3 border border-border">
-                <div>
-                  <p className="text-sm">{(Number(w.amount) / 1e7).toFixed(2)} XLM</p>
-                  <p className="text-[10px] text-neutral-600">
-                    {new Date(w.unlockTime) <= new Date() ? 'Ready to claim' : `Unlocks ${new Date(w.unlockTime).toLocaleDateString()}`}
-                  </p>
-                </div>
-                <button
-                  onClick={() => claimWithdrawal(w.id)}
-                  disabled={isClaiming || new Date(w.unlockTime) > new Date()}
-                  className="btn-outline text-xs px-3 py-1.5"
+            {pendingWithdrawals.map((w: { id: string; amount: string; unlockTime: string; status: string }) => {
+              const ready = new Date(w.unlockTime) <= new Date();
+              return (
+                <div
+                  key={w.id}
+                  className="flex items-center justify-between rounded-lg p-3"
+                  style={{ background: '#080808', border: '1px solid #1e1e1e' }}
                 >
-                  {isClaiming ? '...' : 'Claim'}
-                </button>
-              </div>
-            ))}
+                  <div>
+                    <p className="text-sm text-white">{(Number(w.amount) / 1e7).toFixed(2)} sXLM</p>
+                    <p className="text-[10px] mt-0.5 text-neutral-500">
+                      ≈ {(Number(w.amount) / 1e7 * stats.exchangeRate).toFixed(2)} XLM
+                    </p>
+                    <p className="text-[10px] mt-0.5" style={{ color: ready ? '#F5CF00' : '#525252' }}>
+                      {ready ? 'Ready to claim' : `Unlocks ${new Date(w.unlockTime).toLocaleDateString()}`}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => claimWithdrawal(w.id)}
+                    disabled={isClaiming || !ready}
+                    className="btn-outline text-xs px-3 py-1.5"
+                    style={{ fontSize: '11px' }}
+                  >
+                    {isClaiming ? '...' : 'Claim'}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

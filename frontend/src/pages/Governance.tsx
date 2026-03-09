@@ -46,7 +46,7 @@ export default function Governance() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'active':
-        return <span className="px-2 py-1 rounded-full text-xs bg-blue-500/20 text-blue-400 border border-blue-500/30">Active</span>;
+        return <span className="px-2 py-1 rounded-full text-xs bg-yellow-400/10 text-yellow-400 border border-yellow-400/20">Active</span>;
       case 'passed':
         return <span className="px-2 py-1 rounded-full text-xs bg-green-500/20 text-green-400 border border-green-500/30">Passed</span>;
       case 'rejected':
@@ -91,7 +91,7 @@ export default function Governance() {
             {params.map((p) => (
               <div key={p.key} className="bg-white/5 rounded-xl p-3">
                 <p className="text-xs text-gray-400">{p.description}</p>
-                <p className="text-sm text-white font-medium mt-1">{p.key}: <span className="text-primary-400">{p.currentValue}</span></p>
+                <p className="text-sm text-white font-medium mt-1">{p.key}: <span className="text-yellow-400">{p.currentValue}</span></p>
               </div>
             ))}
           </div>
@@ -115,7 +115,7 @@ export default function Governance() {
         {isConnected ? (
           <button
             onClick={() => setShowCreateForm(!showCreateForm)}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary-500/20 text-primary-400 border border-primary-500/30 hover:bg-primary-500/30 transition-colors text-sm font-medium"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-yellow-400/10 text-yellow-400 border border-yellow-400/20 hover:bg-yellow-400/15 transition-colors text-sm font-medium"
           >
             <Plus className="w-4 h-4" />
             Create Proposal
@@ -123,7 +123,7 @@ export default function Governance() {
         ) : (
           <button
             onClick={connect}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary-500/20 text-primary-400 border border-primary-500/30 text-sm font-medium"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-yellow-400/10 text-yellow-400 border border-yellow-400/20 text-sm font-medium"
           >
             Connect Wallet to Propose
           </button>
@@ -131,7 +131,7 @@ export default function Governance() {
       </div>
 
       {showCreateForm && (
-        <div className="glass rounded-2xl p-6 space-y-4 border border-primary-500/20">
+        <div className="glass rounded-2xl p-6 space-y-4 border border-yellow-400/15">
           <h3 className="text-sm font-semibold text-white">New Proposal</h3>
           <div>
             <label className="text-xs text-gray-400 mb-1 block">Parameter</label>
@@ -177,7 +177,7 @@ export default function Governance() {
       {/* Proposals List */}
       <div className="space-y-4">
         <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-          <Vote className="w-4 h-4 text-primary-400" />
+          <Vote className="w-4 h-4 text-yellow-400" />
           Proposals
         </h3>
 

@@ -1,7 +1,17 @@
 import { useState, useCallback, useEffect } from 'react';
+import { SorobanRpc, Contract, Address, TransactionBuilder, BASE_FEE, scValToNative } from '@stellar/stellar-sdk';
 import axios from '../lib/apiClient';
-import { API_BASE_URL } from '../config/contracts';
+import { API_BASE_URL, NETWORK, CONTRACTS } from '../config/contracts';
 import { useWallet } from './useWallet';
+
+// Admin public key used as source for read-only Soroban simulations.
+// It's a known active account on mainnet — the user's own account may not
+// be loadable by getAccount() before their first Soroban interaction.
+const SIMULATION_SOURCE = 'GDWXTIIROGCVBSNQMBJFH6HOWQ4YSRVMKSUS53CH6MP56WSWD6J4VZ5N';
+
+// Hardcoded mainnet sXLM token contract ID — do NOT use CONTRACTS.sxlmToken here
+// because VITE_SXLM_TOKEN_CONTRACT_ID may be misconfigured in the deployment env.
+const SXLM_TOKEN_CONTRACT = 'CCGFHMW3NZD5Z7ATHYHZSEG6ABCJADUHP5HIAWFPR37CP4VGNEDQO7FJ';
 
 interface StakingState {
   isStaking: boolean;
@@ -9,12 +19,14 @@ interface StakingState {
   isClaiming: boolean;
   error: string | null;
   lastTxHash: string | null;
+  isPending: boolean;
 }
 
 interface BalanceInfo {
   sxlmBalance: number;
   xlmValue: number;
   exchangeRate: number;
+  xlmNativeBalance: number;
   archived?: boolean;
 }
 
@@ -28,6 +40,7 @@ interface PendingWithdrawal {
 }
 
 interface UseStakingReturn extends StakingState {
+  isPending: boolean;
   stake: (xlmAmount: number) => Promise<boolean>;
   unstake: (sxlmAmount: number, instant?: boolean) => Promise<boolean>;
   claimWithdrawal: (withdrawalId: string) => Promise<boolean>;
@@ -46,9 +59,10 @@ export function useStaking(): UseStakingReturn {
     isClaiming: false,
     error: null,
     lastTxHash: null,
+    isPending: false,
   });
   const [pendingWithdrawals, setPendingWithdrawals] = useState<PendingWithdrawal[]>([]);
-  const [balance, setBalance] = useState<BalanceInfo>({ sxlmBalance: 0, xlmValue: 0, exchangeRate: 1 });
+  const [balance, setBalance] = useState<BalanceInfo>({ sxlmBalance: 0, xlmValue: 0, exchangeRate: 1, xlmNativeBalance: 0 });
 
   const clearError = useCallback(() => {
     setState((prev) => ({ ...prev, error: null }));
@@ -57,12 +71,56 @@ export function useStaking(): UseStakingReturn {
   const refreshBalance = useCallback(async () => {
     if (!publicKey) return;
     try {
-      const { data } = await axios.get(`${API_BASE_URL}/api/balance/${publicKey}`);
+      // Fetch Horizon account (native XLM) and backend (exchange rate) in parallel
+      const [accountRes, apiRes] = await Promise.all([
+        fetch(`${NETWORK.horizonUrl}/accounts/${publicKey}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+        axios.get(`${API_BASE_URL}/api/balance/${publicKey}`).catch(() => null),
+      ]);
+
+      // Native XLM balance from Horizon
+      let xlmNativeBalance = 0;
+      if (accountRes?.balances) {
+        const nativeBal = accountRes.balances.find(
+          (b: { asset_type: string; balance: string }) => b.asset_type === 'native'
+        );
+        if (nativeBal) xlmNativeBalance = parseFloat(nativeBal.balance);
+      }
+
+      // Exchange rate from backend
+      const exchangeRate: number = apiRes?.data?.exchangeRate ?? 1;
+
+      // Read sXLM balance DIRECTLY from the on-chain token contract via Soroban RPC.
+      // Uses SXLM_TOKEN_CONTRACT constant (not CONTRACTS.sxlmToken) to avoid env-var misconfiguration.
+      let sxlmBalance = 0;
+      try {
+        const soroban = new SorobanRpc.Server(NETWORK.sorobanRpcUrl);
+        const account = await soroban.getAccount(SIMULATION_SOURCE);
+        const tx = new TransactionBuilder(account, {
+          fee: BASE_FEE,
+          networkPassphrase: NETWORK.networkPassphrase,
+        })
+          .addOperation(
+            new Contract(SXLM_TOKEN_CONTRACT).call('balance', new Address(publicKey).toScVal())
+          )
+          .setTimeout(30)
+          .build();
+        const sim = await soroban.simulateTransaction(tx);
+        if (SorobanRpc.Api.isSimulationSuccess(sim) && sim.result) {
+          sxlmBalance = Number(scValToNative(sim.result.retval)) / 1e7;
+        }
+      } catch {
+        // Fall back to backend value if Soroban read fails
+        sxlmBalance = apiRes?.data?.sxlmBalance ?? 0;
+      }
+
       setBalance({
-        sxlmBalance: data.sxlmBalance,
-        xlmValue: data.xlmValue,
-        exchangeRate: data.exchangeRate,
-        archived: data.archived ?? false,
+        sxlmBalance,
+        xlmValue: sxlmBalance * exchangeRate,
+        exchangeRate,
+        xlmNativeBalance,
+        archived: apiRes?.data?.archived ?? false,
       });
     } catch {
       // silently fail
@@ -108,12 +166,14 @@ export function useStaking(): UseStakingReturn {
             ...prev,
             isStaking: false,
             lastTxHash: submitData.txHash,
+            isPending: submitData.pending ?? false,
           }));
         } else {
           setState((prev) => ({
             ...prev,
             isStaking: false,
             lastTxHash: txData.txHash || null,
+            isPending: false,
           }));
         }
 
@@ -162,12 +222,14 @@ export function useStaking(): UseStakingReturn {
             ...prev,
             isUnstaking: false,
             lastTxHash: submitData.txHash,
+            isPending: submitData.pending ?? false,
           }));
         } else {
           setState((prev) => ({
             ...prev,
             isUnstaking: false,
             lastTxHash: txData.txHash || null,
+            isPending: false,
           }));
         }
 
@@ -216,16 +278,21 @@ export function useStaking(): UseStakingReturn {
         }
 
         setState((prev) => ({ ...prev, isClaiming: false }));
-        // Refresh withdrawals inline to avoid stale closure
+
+        // Mark withdrawal as claimed in the backend DB
         try {
-          const { data } = await axios.get(
-            `${API_BASE_URL}/api/staking/withdrawals/${publicKey}`,
+          await axios.post(
+            `${API_BASE_URL}/api/staking/withdrawals/mark-claimed`,
+            { wallet: publicKey, withdrawalId },
             { headers: getAuthHeaders() }
           );
-          setPendingWithdrawals(data.withdrawals || []);
         } catch {
-          // Silently fail
+          // Non-critical — UI will still remove it below
         }
+
+        // Remove claimed withdrawal from local state immediately
+        setPendingWithdrawals((prev) => prev.filter((w) => w.id !== withdrawalId));
+        await refreshBalance();
         return true;
       } catch (err: unknown) {
         const message =

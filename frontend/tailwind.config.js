@@ -5,24 +5,23 @@ export default {
     extend: {
       colors: {
         background: '#000000',
-        surface: '#111111',
-        'surface-light': '#1a1a1a',
-        border: '#222222',
-        primary: {
-          300: '#93c5fd',
-          400: '#60a5fa',
-          500: '#3b82f6',
-          600: '#2563eb',
-        },
-        accent: {
-          400: '#22d3ee',
-          500: '#06b6d4',
-          600: '#0891b2',
+        surface: '#0d0d0d',
+        'surface-light': '#161616',
+        border: '#1e1e1e',
+        yellow: {
+          300: '#FDE68A',
+          400: '#F5CF00',  // Stellar brand yellow — primary accent
+          500: '#D4A800',  // hover / pressed
+          600: '#A38200',  // deep
         },
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
         mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+      },
+      boxShadow: {
+        'yellow-glow': '0 0 20px rgba(245, 207, 0, 0.15)',
+        'yellow-sm': '0 0 10px rgba(245, 207, 0, 0.08)',
       },
     },
   },

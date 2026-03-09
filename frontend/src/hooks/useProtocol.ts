@@ -23,17 +23,6 @@ interface APYData {
   apy90d: number;
 }
 
-interface Validator {
-  id: string;
-  pubkey: string;
-  name: string;
-  uptimePercent: number;
-  commissionPercent: number;
-  performanceScore: number;
-  allocatedStake: number;
-  isActive: boolean;
-}
-
 interface HistoricalDataPoint {
   timestamp: string;
   value: number;
@@ -42,7 +31,6 @@ interface HistoricalDataPoint {
 interface UseProtocolReturn {
   stats: ProtocolStats;
   apy: APYData;
-  validators: Validator[];
   apyHistory: HistoricalDataPoint[];
   exchangeRateHistory: HistoricalDataPoint[];
   tvlHistory: HistoricalDataPoint[];
@@ -89,7 +77,6 @@ function generateMockHistory(days: number, baseValue: number, variance: number):
 export function useProtocol(): UseProtocolReturn {
   const [stats, setStats] = useState<ProtocolStats>(DEFAULT_STATS);
   const [apy, setApy] = useState<APYData>(DEFAULT_APY);
-  const [validators, setValidators] = useState<Validator[]>([]);
   const [apyHistory, setApyHistory] = useState<HistoricalDataPoint[]>([]);
   const [exchangeRateHistory, setExchangeRateHistory] = useState<HistoricalDataPoint[]>([]);
   const [tvlHistory, setTvlHistory] = useState<HistoricalDataPoint[]>([]);
@@ -99,10 +86,9 @@ export function useProtocol(): UseProtocolReturn {
 
   const fetchProtocolData = useCallback(async () => {
     try {
-      const [statsRes, apyRes, validatorsRes, chartRes] = await Promise.allSettled([
+      const [statsRes, apyRes, chartRes] = await Promise.allSettled([
         axios.get(`${API_BASE_URL}/api/protocol-stats`),
         axios.get(`${API_BASE_URL}/api/apy`),
-        axios.get(`${API_BASE_URL}/api/validators`),
         axios.get(`${API_BASE_URL}/api/chart-data?days=90`),
       ]);
 
@@ -112,10 +98,6 @@ export function useProtocol(): UseProtocolReturn {
 
       if (apyRes.status === 'fulfilled') {
         setApy(apyRes.value.data);
-      }
-
-      if (validatorsRes.status === 'fulfilled') {
-        setValidators(validatorsRes.value.data.validators || validatorsRes.value.data || []);
       }
 
       // Use real chart data from backend if available
@@ -146,7 +128,6 @@ export function useProtocol(): UseProtocolReturn {
       // Show zeros instead of fake data — no misleading numbers
       setStats(DEFAULT_STATS);
       setApy(DEFAULT_APY);
-      setValidators([]);
       setApyHistory([]);
       setExchangeRateHistory([]);
       setTvlHistory([]);
@@ -158,14 +139,13 @@ export function useProtocol(): UseProtocolReturn {
 
   useEffect(() => {
     fetchProtocolData();
-    const interval = setInterval(fetchProtocolData, 30_000);
+    const interval = setInterval(fetchProtocolData, 60_000);
     return () => clearInterval(interval);
   }, [fetchProtocolData]);
 
   return {
     stats,
     apy,
-    validators,
     apyHistory,
     exchangeRateHistory,
     tvlHistory,

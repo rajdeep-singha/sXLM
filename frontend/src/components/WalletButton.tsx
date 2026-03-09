@@ -44,38 +44,96 @@ export default function WalletButton() {
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setShowDropdown(!showDropdown)}
-        className="flex items-center gap-2 px-3 py-1.5 border border-border rounded-lg text-xs hover:bg-surface transition-colors"
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all duration-150"
+        style={{
+          border: '1px solid #1e1e1e',
+          background: showDropdown ? '#0d0d0d' : 'transparent',
+          color: '#ccc',
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgba(245,207,0,0.3)')}
+        onMouseLeave={(e) => (e.currentTarget.style.borderColor = showDropdown ? 'rgba(245,207,0,0.3)' : '#1e1e1e')}
       >
-        <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-        <span className="font-mono text-neutral-300">{formatAddress(publicKey || '')}</span>
+        {/* Yellow pulsing dot for connected state */}
+        <span
+          style={{
+            width: 6, height: 6, borderRadius: '50%',
+            background: '#F5CF00',
+            boxShadow: '0 0 6px rgba(245,207,0,0.6)',
+            animation: 'yellow-pulse 2.5s ease-in-out infinite',
+            display: 'inline-block',
+            flexShrink: 0,
+          }}
+        />
+        <span className="font-mono" style={{ color: '#F5CF00', fontWeight: 600 }}>
+          {balance.sxlmBalance.toFixed(2)} sXLM
+        </span>
+        <span className="font-mono" style={{ color: '#444' }}>|</span>
+        <span className="font-mono" style={{ color: '#6b6b6b' }}>
+          {formatAddress(publicKey || '')}
+        </span>
       </button>
 
       {showDropdown && (
-        <div className="absolute right-0 top-full mt-2 w-56 card p-2 shadow-2xl shadow-black/80 z-50">
+        <div
+          className="absolute right-0 top-full mt-2 w-60 rounded-xl p-2 z-50"
+          style={{
+            background: '#0d0d0d',
+            border: '1px solid #1e1e1e',
+            boxShadow: '0 16px 48px rgba(0,0,0,0.8)',
+          }}
+        >
           <div className="px-3 py-2 mb-1">
-            <p className="text-[10px] text-neutral-500 mb-1">Connected</p>
-            <p className="font-mono text-[10px] text-neutral-400 break-all">{publicKey}</p>
-            <div className="mt-2 pt-2 border-t border-border">
-              <p className="text-[10px] text-neutral-500 mb-0.5">sXLM Balance</p>
-              <p className="font-mono text-sm font-semibold text-white">
+            <p className="text-[10px] mb-1" style={{ color: '#525252' }}>Connected</p>
+            <p className="font-mono text-[10px] break-all" style={{ color: '#6b6b6b' }}>{publicKey}</p>
+
+            {/* sXLM balance — primary */}
+            <div className="mt-2 pt-2" style={{ borderTop: '1px solid #1e1e1e' }}>
+              <p className="text-[10px] mb-0.5" style={{ color: '#525252' }}>sXLM Balance</p>
+              <p className="font-mono text-base font-bold" style={{ color: '#F5CF00' }}>
                 {balance.sxlmBalance.toFixed(4)}
-                <span className="text-neutral-500 text-[10px] font-normal ml-1">sXLM</span>
+                <span className="text-[10px] font-normal ml-1" style={{ color: '#525252' }}>sXLM</span>
               </p>
-              <p className="text-[10px] text-neutral-600 mt-0.5">
-                ≈ {balance.xlmValue.toFixed(4)} XLM
+              <p className="text-[10px] mt-0.5" style={{ color: '#383838' }}>
+                ≈ {balance.xlmValue.toFixed(4)} XLM value
+              </p>
+            </div>
+
+            {/* XLM in wallet — secondary */}
+            <div className="mt-2 pt-2 flex justify-between items-center" style={{ borderTop: '1px solid #1e1e1e' }}>
+              <p className="text-[10px]" style={{ color: '#525252' }}>XLM in Wallet</p>
+              <p className="font-mono text-[11px]" style={{ color: '#6b6b6b' }}>
+                {balance.xlmNativeBalance.toFixed(4)}
+                <span className="text-[10px] ml-1" style={{ color: '#3a3a3a' }}>XLM</span>
               </p>
             </div>
           </div>
+
           <button
             onClick={copyAddress}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded text-xs text-neutral-400 hover:bg-white/5 transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors"
+            style={{ color: '#6b6b6b' }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+              e.currentTarget.style.color = '#fff';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent';
+              e.currentTarget.style.color = '#6b6b6b';
+            }}
           >
-            {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
-            {copied ? 'Copied' : 'Copy Address'}
+            {copied
+              ? <Check className="w-3 h-3" style={{ color: '#4ade80' }} />
+              : <Copy className="w-3 h-3" />
+            }
+            {copied ? 'Copied!' : 'Copy Address'}
           </button>
+
           <button
             onClick={() => { disconnect(); setShowDropdown(false); }}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded text-xs text-red-400 hover:bg-red-500/5 transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors"
+            style={{ color: '#f87171' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(248,113,113,0.06)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
           >
             <LogOut className="w-3 h-3" />
             Disconnect

@@ -11,6 +11,7 @@ export default function Lending() {
     stats,
     isLoading,
     isSubmitting,
+    isPending,
     error,
     lastTxHash,
     depositCollateral,
@@ -74,14 +75,14 @@ export default function Lending() {
       {/* Protocol Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
+          { label: 'Available Liquidity', value: formatXLM(stats.poolBalance) + ' XLM', highlight: true },
           { label: 'Total Collateral', value: formatXLM(stats.totalCollateral) + ' sXLM' },
-          { label: 'Total Borrowed', value: formatXLM(stats.totalBorrowed) + ' XLM' },
           { label: 'Collateral Factor', value: (stats.collateralFactorBps / 100) + '%' },
           { label: 'Borrow Rate', value: (stats.borrowRateBps / 100) + '% APR' },
         ].map((stat) => (
           <div key={stat.label} className="glass rounded-xl p-4 text-center">
             <p className="text-xs text-gray-400">{stat.label}</p>
-            <p className="text-lg font-bold text-white mt-1">{stat.value}</p>
+            <p className={`text-lg font-bold mt-1 ${stat.highlight ? 'text-yellow-400' : 'text-white'}`}>{stat.value}</p>
           </div>
         ))}
       </div>
@@ -90,7 +91,7 @@ export default function Lending() {
         {/* Position Card */}
         <div className="glass rounded-2xl p-6 space-y-4">
           <div className="flex items-center gap-2">
-            <Shield className="w-5 h-5 text-primary-400" />
+            <Shield className="w-5 h-5 text-yellow-400" />
             <h3 className="text-sm font-semibold text-white">Your Position</h3>
           </div>
           {isLoading ? (
@@ -140,7 +141,7 @@ export default function Lending() {
                 onClick={() => { setActiveTab(tab); setAmount(''); setBorrowerAddress(''); clearError(); }}
                 className={`flex-1 py-2 rounded-md text-xs font-medium transition-all ${
                   activeTab === tab
-                    ? 'bg-primary-500/20 text-white border border-primary-500/30'
+                    ? 'bg-yellow-400/10 text-white border border-yellow-400/20'
                     : 'text-gray-400 hover:text-white'
                 }`}
               >
@@ -154,6 +155,14 @@ export default function Lending() {
               </button>
             ))}
           </div>
+
+          {/* Step 1 reminder: must deposit before borrow/withdraw/repay */}
+          {(activeTab === 'borrow' || activeTab === 'withdraw' || activeTab === 'repay') && position.sxlmDeposited === 0 && (
+            <div className="rounded-lg p-3 text-xs" style={{ background: 'rgba(245,207,0,0.06)', border: '1px solid rgba(245,207,0,0.2)' }}>
+              <p style={{ color: '#F5CF00' }} className="font-medium mb-1">Step 1 required: Deposit sXLM first</p>
+              <p className="text-gray-400">You have no collateral deposited. Switch to the <strong className="text-white">Deposit</strong> tab, deposit your sXLM, then come back to borrow.</p>
+            </div>
+          )}
 
           {activeTab === 'liquidate' ? (
             <div>
@@ -174,6 +183,9 @@ export default function Lending() {
               <label className="text-xs text-gray-400 mb-1 block">
                 {activeTab === 'deposit' || activeTab === 'withdraw' ? 'sXLM Amount' : 'XLM Amount'}
               </label>
+              {activeTab === 'borrow' && position.maxBorrow > 0 && (
+                <p className="text-xs text-gray-500 mb-1">Max: {position.maxBorrow.toFixed(4)} XLM</p>
+              )}
               <input
                 type="number"
                 value={amount}
@@ -191,16 +203,31 @@ export default function Lending() {
           )}
 
           {lastTxHash && (
-            <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-3">
-              <p className="text-xs text-green-400">Transaction successful!</p>
+            <div className={`rounded-lg p-3 space-y-1 ${isPending ? 'bg-yellow-500/10 border border-yellow-500/20' : 'bg-green-500/10 border border-green-500/20'}`}>
+              <p className={`text-xs ${isPending ? 'text-yellow-400' : 'text-green-400'}`}>
+                {isPending ? 'Transaction submitted — confirming on Stellar (may take a moment)' : 'Transaction successful!'}
+              </p>
+              <a
+                href={`https://stellar.expert/explorer/public/tx/${lastTxHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block text-[10px] font-mono truncate"
+                style={{ color: isPending ? '#F5CF00' : '#4ade80', opacity: 0.7 }}
+              >
+                {lastTxHash}
+              </a>
             </div>
           )}
 
           {isConnected ? (
             <button
               onClick={handleSubmit}
-              disabled={isSubmitting || (activeTab === 'liquidate' ? !borrowerAddress : (!amount || parseFloat(amount) <= 0))}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 text-white font-semibold hover:opacity-90 transition-opacity disabled:opacity-40"
+              disabled={
+                isSubmitting ||
+                (activeTab === 'liquidate' ? !borrowerAddress : (!amount || parseFloat(amount) <= 0)) ||
+                (['borrow', 'withdraw', 'repay'].includes(activeTab) && position.sxlmDeposited === 0)
+              }
+              className="w-full py-3 rounded-xl font-semibold hover:opacity-90 transition-opacity disabled:opacity-40 text-black" style={{ background: '#F5CF00' }}
             >
               {isSubmitting ? 'Processing...' : buttonLabels[activeTab]}
             </button>
@@ -218,7 +245,7 @@ export default function Lending() {
       {/* Info */}
       <div className="glass rounded-2xl p-6 space-y-4">
         <div className="flex items-center gap-2">
-          <TrendingUp className="w-5 h-5 text-primary-400" />
+          <TrendingUp className="w-5 h-5 text-yellow-400" />
           <h3 className="text-sm font-semibold text-white">How Lending Works</h3>
         </div>
         <div className="space-y-3 text-sm text-gray-400">

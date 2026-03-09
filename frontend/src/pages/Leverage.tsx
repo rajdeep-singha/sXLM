@@ -28,7 +28,7 @@ export default function Leverage() {
   const [principal, setPrincipal] = useState('1000');
   const [loops, setLoops] = useState('3');
   const [collateralFactor, setCollateralFactor] = useState('0.7');
-  const [stakingAPR, setStakingAPR] = useState('0.06');
+  const [stakingAPR, setStakingAPR] = useState('0');
   const [borrowAPR, setBorrowAPR] = useState('0.04');
   const [result, setResult] = useState<SimResult | null>(null);
   const [optimalResult, setOptimalResult] = useState<OptimalResult | null>(null);
@@ -76,7 +76,7 @@ export default function Leverage() {
         {/* Input Card */}
         <div className="glass rounded-2xl p-6 space-y-4">
           <div className="flex items-center gap-2">
-            <Calculator className="w-5 h-5 text-primary-400" />
+            <Calculator className="w-5 h-5 text-yellow-400" />
             <h3 className="text-sm font-semibold text-white">Parameters</h3>
           </div>
 
@@ -116,7 +116,7 @@ export default function Leverage() {
             <button
               onClick={handleOptimal}
               disabled={isLoading}
-              className="flex items-center gap-1 px-4 py-3 rounded-xl bg-primary-500/20 text-primary-400 border border-primary-500/30 hover:bg-primary-500/30 transition-colors text-sm font-medium disabled:opacity-40"
+              className="flex items-center gap-1 px-4 py-3 rounded-xl bg-yellow-400/10 text-yellow-400 border border-yellow-400/20 hover:bg-yellow-400/15 transition-colors text-sm font-medium disabled:opacity-40"
             >
               <Zap className="w-4 h-4" /> Optimal
             </button>
@@ -126,7 +126,7 @@ export default function Leverage() {
         {/* Results Card */}
         <div className="glass rounded-2xl p-6 space-y-4">
           <div className="flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-primary-400" />
+            <TrendingUp className="w-5 h-5 text-yellow-400" />
             <h3 className="text-sm font-semibold text-white">Results</h3>
           </div>
 
@@ -151,8 +151,8 @@ export default function Leverage() {
           )}
 
           {optimalResult && (
-            <div className="mt-4 p-4 rounded-xl bg-primary-500/10 border border-primary-500/20 space-y-2">
-              <p className="text-xs font-semibold text-primary-400">Optimal Strategy</p>
+            <div className="mt-4 p-4 rounded-xl bg-yellow-400/8 border border-yellow-400/15 space-y-2">
+              <p className="text-xs font-semibold text-yellow-400">Optimal Strategy</p>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-400">Optimal Loops</span>
                 <span className="text-white">{optimalResult.optimalLoops}</span>
@@ -176,7 +176,7 @@ export default function Leverage() {
         <div className="space-y-2 text-sm text-gray-400">
           <p>Leverage = 1 / (1 - c), where c = collateral factor</p>
           <p>Net Yield = (Leverage x Staking APR) - ((Leverage - 1) x Borrow APR)</p>
-          <p>Example: c=0.7, r=6%, b=4% → Leverage=3.33x, Net Yield=10%</p>
+          <p>Example: c=0.7, r=APR%, b=4% → Leverage=3.33x, Net Yield=(L×r)−((L−1)×b)</p>
         </div>
       </div>
     </div>

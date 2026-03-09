@@ -13,6 +13,7 @@ interface LendingPosition {
 interface LendingStats {
   totalCollateral: number;
   totalBorrowed: number;
+  poolBalance: number;
   collateralFactorBps: number;
   liquidationThresholdBps: number;
   borrowRateBps: number;
@@ -24,6 +25,7 @@ interface UseLendingReturn {
   stats: LendingStats;
   isLoading: boolean;
   isSubmitting: boolean;
+  isPending: boolean;
   error: string | null;
   lastTxHash: string | null;
   depositCollateral: (amount: number) => Promise<boolean>;
@@ -45,6 +47,7 @@ const DEFAULT_POSITION: LendingPosition = {
 const DEFAULT_STATS: LendingStats = {
   totalCollateral: 0,
   totalBorrowed: 0,
+  poolBalance: 0,
   collateralFactorBps: 7000,
   liquidationThresholdBps: 8000,
   borrowRateBps: 500,
@@ -57,6 +60,7 @@ export function useLending(): UseLendingReturn {
   const [stats, setStats] = useState<LendingStats>(DEFAULT_STATS);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastTxHash, setLastTxHash] = useState<string | null>(null);
 
@@ -85,7 +89,7 @@ export function useLending(): UseLendingReturn {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 15_000);
+    const interval = setInterval(fetchData, 60_000);
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -99,6 +103,7 @@ export function useLending(): UseLendingReturn {
       setIsSubmitting(true);
       setError(null);
       setLastTxHash(null);
+      setIsPending(false);
 
       try {
         // Step 1: Build unsigned tx
@@ -120,6 +125,7 @@ export function useLending(): UseLendingReturn {
           );
 
           setLastTxHash(submitData.txHash);
+          setIsPending(submitData.pending ?? false);
         }
 
         await fetchData();
@@ -170,6 +176,7 @@ export function useLending(): UseLendingReturn {
       setIsSubmitting(true);
       setError(null);
       setLastTxHash(null);
+      setIsPending(false);
 
       try {
         const { data: txData } = await axios.post(
@@ -186,6 +193,7 @@ export function useLending(): UseLendingReturn {
             { headers: getAuthHeaders() }
           );
           setLastTxHash(submitData.txHash);
+          setIsPending(submitData.pending ?? false);
         }
 
         await fetchData();
@@ -211,6 +219,7 @@ export function useLending(): UseLendingReturn {
     stats,
     isLoading,
     isSubmitting,
+    isPending,
     error,
     lastTxHash,
     depositCollateral,
