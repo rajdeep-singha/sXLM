@@ -2,6 +2,7 @@ import ValidatorTable from '../components/ValidatorTable';
 import { useProtocol } from '../hooks/useProtocol';
 
 export default function Validators() {
+
   const { validators } = useProtocol();
   const avgScore = validators.length
     ? validators.reduce((sum, v) => sum + v.performanceScore, 0) / validators.length
