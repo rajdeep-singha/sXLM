@@ -96,9 +96,6 @@ jobs:
       - backend-ci
       - frontend-ci
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    defaults:
-      run:
-        working-directory: frontend
     env:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -117,4 +114,4 @@ jobs:
         run: npm install --global vercel@latest
 
       - name: Deploy to Vercel
-        run: vercel deploy --prod --yes --cwd . --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
