@@ -240,6 +240,8 @@ Required GitHub repository secrets:
 | `VERCEL_ORG_ID` | Vercel team/user ID |
 | `VERCEL_PROJECT_ID` | Vercel frontend project ID |
 
+<img width="1854" height="942" alt="image" src="https://github.com/user-attachments/assets/da08869b-bc1b-416a-b9bc-6c28b639c664" />
+
 Backend production environment variables belong in Render. Frontend production environment variables belong in Vercel. Do not commit local `.env` files.
 
 If Vercel's Git integration is also connected to this repository, disable automatic production deploys there to avoid duplicate deploys from both Vercel and GitHub Actions.
