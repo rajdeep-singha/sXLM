@@ -3,6 +3,8 @@
 A liquid staking protocol for Stellar (XLM) built on Soroban. Users stake XLM to receive sXLM, participate in validator delegation, and access lending, liquidity pools, governance, and leverage features.
 
 ---
+## User FeedBack
+<img width="1173" height="736" alt="image" src="https://github.com/user-attachments/assets/0795de6d-ccb6-47c9-9c8e-1b6c800fd3c8" />
 
 ## Architecture
 
