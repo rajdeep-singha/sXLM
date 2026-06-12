@@ -20,6 +20,7 @@ export declare const config: {
         readonly url: string;
     };
     readonly redis: {
+        readonly enabled: boolean;
         readonly url: string;
     };
     readonly admin: {

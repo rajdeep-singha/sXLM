@@ -1,6 +1,8 @@
 import dotenv from "dotenv";
 
-dotenv.config();
+if (process.env["NODE_ENV"] !== "production") {
+  dotenv.config();
+}
 
 function requireEnv(key: string, fallback?: string): string {
   const value = process.env[key] ?? fallback;
@@ -60,6 +62,7 @@ export const config = {
   },
 
   redis: {
+    enabled: process.env["EVENT_BUS_DRIVER"] === "redis",
     url: process.env["REDIS_URL"] ?? "",
   },
 

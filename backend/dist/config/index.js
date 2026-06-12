@@ -1,5 +1,7 @@
 import dotenv from "dotenv";
-dotenv.config();
+if (process.env["NODE_ENV"] !== "production") {
+    dotenv.config();
+}
 function requireEnv(key, fallback) {
     const value = process.env[key] ?? fallback;
     if (value === undefined) {
@@ -29,6 +31,7 @@ export const config = {
         url: requireEnv("DATABASE_URL", "postgresql://sxlm:sxlm_password@localhost:5432/sxlm_protocol"),
     },
     redis: {
+        enabled: process.env["EVENT_BUS_DRIVER"] === "redis",
         url: process.env["REDIS_URL"] ?? "",
     },
     admin: {

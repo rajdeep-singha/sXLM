@@ -23,7 +23,10 @@ export class EventBus {
     isConnected;
     useRedis;
     constructor() {
-        this.useRedis = config.redis.url.length > 0;
+        this.useRedis = config.redis.enabled;
+        if (this.useRedis && config.redis.url.length === 0) {
+            throw new Error("[EventBus] EVENT_BUS_DRIVER=redis requires REDIS_URL.");
+        }
         this.publisher = this.useRedis
             ? new Redis(config.redis.url, {
                 maxRetriesPerRequest: 3,
