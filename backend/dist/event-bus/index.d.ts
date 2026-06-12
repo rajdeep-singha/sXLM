@@ -67,12 +67,14 @@ export declare class EventBus {
     private subscriber;
     private handlers;
     private isConnected;
+    private useRedis;
     constructor();
     connect(): Promise<void>;
     publish<T extends EventType>(channel: T, data: EventPayloadMap[T]): Promise<number>;
     subscribe<T extends EventType>(channel: T, callback: (data: EventPayloadMap[T]) => void | Promise<void>): Promise<void>;
     unsubscribe(channel: string): Promise<void>;
     disconnect(): Promise<void>;
+    private dispatch;
 }
 export declare function getEventBus(): EventBus;
 export declare function initEventBus(): Promise<void>;

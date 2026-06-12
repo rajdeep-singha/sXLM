@@ -1,37 +1,18 @@
 import { startPeriodicRefresh as startExchangeRateRefresh, stopPeriodicRefresh as stopExchangeRateRefresh, getCurrentRate, } from "./exchangeRateManager.js";
 import { startWithdrawalQueueProcessor, stopWithdrawalQueueProcessor, getQueueStats, } from "./withdrawalQueueProcessor.js";
 import { getTotalStaked, getTotalSupply, getLiquidityBuffer, getTreasuryBalance, getIsPaused, getProtocolFeeBps, callApplySlashing, callPause, callUnpause, callRecalibrateRate, } from "./contractClient.js";
-import { DelegationManager } from "./delegationManager.js";
 import { getEventBus, EventType } from "../event-bus/index.js";
 export class StakingEngine {
     prisma;
-    delegationManager;
     constructor(prisma) {
         this.prisma = prisma;
-        this.delegationManager = new DelegationManager(prisma);
     }
     async initialize() {
         console.log("[StakingEngine] Initializing...");
         startExchangeRateRefresh();
         startWithdrawalQueueProcessor(this.prisma);
-        // Subscribe to deposit events → allocate to validators
-        const eventBus = getEventBus();
-        await eventBus.subscribe(EventType.STAKE_EXECUTED, async (data) => {
-            const amount = BigInt(data.xlmAmount);
-            if (amount > BigInt(0)) {
-                await this.delegationManager.allocateDeposit(amount);
-                console.log(`[StakingEngine] Allocated deposit of ${Number(amount) / 1e7} XLM to validators`);
-            }
-        });
-        // Subscribe to withdrawal events → deallocate from validators
-        await eventBus.subscribe(EventType.UNSTAKE_EXECUTED, async (data) => {
-            const amount = BigInt(data.xlmAmount);
-            if (amount > BigInt(0)) {
-                await this.delegationManager.deallocateWithdrawal(amount);
-                console.log(`[StakingEngine] Deallocated ${Number(amount) / 1e7} XLM from validators`);
-            }
-        });
         // Subscribe to slashing events → recalculate withdrawal queue
+        const eventBus = getEventBus();
         await eventBus.subscribe(EventType.SLASHING_APPLIED, async (data) => {
             const slashAmount = BigInt(data.amount);
             await this.recalculateWithdrawalQueueAfterSlash(slashAmount);
@@ -48,29 +29,28 @@ export class StakingEngine {
         return getCurrentRate();
     }
     async getProtocolStats() {
-        const [totalStaked, totalSupply, exchangeRate, liquidityBuffer, treasuryBalance, isPaused, protocolFeeBps] = await Promise.all([
+        // Use allSettled so one RPC failure doesn't break the entire response
+        const [totalStakedR, totalSupplyR, exchangeRateR, liquidityBufferR, treasuryBalanceR, isPausedR, protocolFeeBpsR] = await Promise.allSettled([
             getTotalStaked(),
             getTotalSupply(),
             getCurrentRate(),
             getLiquidityBuffer(),
-            getTreasuryBalance().catch(() => BigInt(0)),
-            getIsPaused().catch(() => false),
-            getProtocolFeeBps().catch(() => 1000),
+            getTreasuryBalance(),
+            getIsPaused(),
+            getProtocolFeeBps(),
         ]);
-        return { totalStaked, totalSupply, exchangeRate, liquidityBuffer, treasuryBalance, isPaused, protocolFeeBps };
+        return {
+            totalStaked: totalStakedR.status === "fulfilled" ? totalStakedR.value : BigInt(0),
+            totalSupply: totalSupplyR.status === "fulfilled" ? totalSupplyR.value : BigInt(0),
+            exchangeRate: exchangeRateR.status === "fulfilled" ? exchangeRateR.value : 1,
+            liquidityBuffer: liquidityBufferR.status === "fulfilled" ? liquidityBufferR.value : BigInt(0),
+            treasuryBalance: treasuryBalanceR.status === "fulfilled" ? treasuryBalanceR.value : BigInt(0),
+            isPaused: isPausedR.status === "fulfilled" ? isPausedR.value : false,
+            protocolFeeBps: protocolFeeBpsR.status === "fulfilled" ? protocolFeeBpsR.value : 1000,
+        };
     }
     async getWithdrawalQueueStats() {
         return getQueueStats(this.prisma);
-    }
-    async getDelegationBreakdown() {
-        return this.delegationManager.getDelegationBreakdown();
-    }
-    async getWeightedProtocolAPR() {
-        return this.delegationManager.getWeightedProtocolAPR();
-    }
-    async rebalanceDelegations() {
-        const totalStaked = await getTotalStaked();
-        return this.delegationManager.rebalanceDelegations(totalStaked);
     }
     /**
      * Fix #4: Recalculate pending withdrawal amounts after slashing.

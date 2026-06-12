@@ -24,11 +24,22 @@ export declare function getLiquidityBuffer(): Promise<bigint>;
 export declare function getTreasuryBalance(): Promise<bigint>;
 export declare function getIsPaused(): Promise<boolean>;
 export declare function getProtocolFeeBps(): Promise<number>;
+export declare function callWithdrawFees(amount: bigint): Promise<string>;
 export declare function callAddRewards(amount: bigint): Promise<string>;
 export declare function callRecalibrateRate(): Promise<string>;
 export declare function callApplySlashing(slashAmount: bigint): Promise<string>;
 export declare function callPause(): Promise<string>;
 export declare function callUnpause(): Promise<string>;
+/**
+ * Governance parameter helpers — apply on-chain after proposal execution.
+ */
+export declare function callSetCooldownPeriod(period: number): Promise<string>;
+export declare function callCollectProtocolFees(): Promise<string>;
+export declare function callSetLpProtocolFeeBps(bps: number): Promise<string>;
+export declare function getLpAccruedProtocolFees(): Promise<bigint>;
+export declare function callUpdateCollateralFactor(bps: number): Promise<string>;
+export declare function callUpdateBorrowRate(bps: number): Promise<string>;
+export declare function callUpdateLiquidationThreshold(bps: number): Promise<string>;
 /**
  * Sync the staking exchange rate to the lending contract.
  * The lending contract stores its own ExchangeRate (sXLM→XLM, scaled by 1e7).

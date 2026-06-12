@@ -24,6 +24,8 @@ export declare class KeeperBot {
     private harvestLendingInterest;
     bumpAllContractTTLs(): Promise<void>;
     recalibrateStakingRate(): Promise<void>;
+    private logLpPoolStats;
+    recycleTreasury(): Promise<void>;
     private simulateView;
     private executeAdminCall;
     private pollTransaction;

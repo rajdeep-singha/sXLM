@@ -5,7 +5,6 @@ import { config } from "../config/index.js";
 import { stakeRoutes } from "./routes/stake.js";
 import { unstakeRoutes } from "./routes/unstake.js";
 import { submitRoutes } from "./routes/submit.js";
-import { validatorRoutes } from "./routes/validators.js";
 import { statsRoutes } from "./routes/stats.js";
 import { apyRoutes } from "./routes/apy.js";
 import { withdrawalRoutes } from "./routes/withdrawals.js";
@@ -20,8 +19,11 @@ export async function startApiGateway(deps) {
     const fastify = Fastify({ logger: true });
     await fastify.register(cors, { origin: true });
     await fastify.register(rateLimit, {
-        max: 100,
+        max: 200,
         timeWindow: "1 minute",
+        // Use X-Forwarded-For so Render's proxy doesn't collapse all IPs into one
+        keyGenerator: (request) => request.headers['x-forwarded-for']?.split(',')[0]?.trim() ??
+            request.ip,
     });
     // Decorate request with wallet field for auth
     fastify.decorateRequest("wallet", "");
@@ -33,11 +35,6 @@ export async function startApiGateway(deps) {
     // Auth routes (public)
     await fastify.register(authRoutes, { prefix: "/api" });
     // Public read-only routes
-    await fastify.register(validatorRoutes, {
-        validatorService: deps.validatorService,
-        prisma: deps.prisma,
-        prefix: "/api",
-    });
     await fastify.register(statsRoutes, {
         prisma: deps.prisma,
         stakingEngine: deps.stakingEngine,
@@ -45,6 +42,7 @@ export async function startApiGateway(deps) {
     });
     await fastify.register(apyRoutes, {
         rewardEngine: deps.rewardEngine,
+        stakingEngine: deps.stakingEngine,
         prefix: "/api",
     });
     // Transaction routes (public — wallet signature is the auth)
@@ -54,6 +52,7 @@ export async function startApiGateway(deps) {
     });
     await fastify.register(unstakeRoutes, {
         stakingEngine: deps.stakingEngine,
+        prisma: deps.prisma,
         prefix: "/api",
     });
     await fastify.register(submitRoutes, {

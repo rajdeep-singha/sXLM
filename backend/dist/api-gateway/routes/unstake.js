@@ -55,7 +55,7 @@ async function buildRestoreTx(server, userAddress) {
     // Build RestoreFootprint tx using the preamble returned by the RPC
     const restoreAccount = await server.getAccount(userAddress);
     const restoreTx = new TransactionBuilder(restoreAccount, {
-        fee: String(Number(BASE_FEE) + Number(simResult.restorePreamble.minResourceFee)),
+        fee: String(2_000_000 + Number(simResult.restorePreamble.minResourceFee)),
         networkPassphrase: config.stellar.networkPassphrase,
     })
         .addOperation(Operation.restoreFootprint({}))
@@ -65,7 +65,7 @@ async function buildRestoreTx(server, userAddress) {
     return restoreTx.toXDR();
 }
 export const unstakeRoutes = async (fastify, opts) => {
-    const { stakingEngine } = opts;
+    const { stakingEngine, prisma } = opts;
     const server = new rpc.Server(config.stellar.rpcUrl);
     /**
      * GET /balance/:address
@@ -154,7 +154,7 @@ export const unstakeRoutes = async (fastify, opts) => {
             const withdrawOp = contract.call("request_withdrawal", new Address(body.userAddress).toScVal(), nativeToScVal(sxlmStroops, { type: "i128" }));
             const account = await server.getAccount(body.userAddress);
             const tx = new TransactionBuilder(account, {
-                fee: BASE_FEE,
+                fee: "2000000", // 0.2 XLM — assembleTransaction adds minResourceFee on top
                 networkPassphrase: config.stellar.networkPassphrase,
             })
                 .addOperation(withdrawOp)
@@ -175,11 +175,24 @@ export const unstakeRoutes = async (fastify, opts) => {
             }
             const preparedTx = rpc.assembleTransaction(tx, simResult).build();
             const exchangeRate = await stakingEngine.getExchangeRate();
+            // Record pending withdrawal in DB so it appears in the UI list
+            const unlockTime = new Date(Date.now() + config.protocol.unbondingPeriodMs);
+            if (prisma) {
+                await prisma.withdrawal.create({
+                    data: {
+                        wallet: body.userAddress,
+                        amount: sxlmStroops,
+                        status: "pending",
+                        unlockTime,
+                    },
+                }).catch(err => fastify.log.warn(err, "Failed to record withdrawal in DB"));
+            }
             return {
                 xdr: preparedTx.toXDR(),
                 networkPassphrase: config.stellar.networkPassphrase,
                 estimatedXlm: (body.amount * exchangeRate).toFixed(7),
                 exchangeRate,
+                unlockTime: unlockTime.toISOString(),
             };
         }
         catch (err) {

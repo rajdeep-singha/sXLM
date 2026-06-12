@@ -9,16 +9,16 @@ function requireEnv(key, fallback) {
 }
 export const config = {
     stellar: {
-        rpcUrl: requireEnv("STELLAR_RPC_URL", "https://soroban-testnet.stellar.org"),
-        networkPassphrase: requireEnv("STELLAR_NETWORK_PASSPHRASE", "Test SDF Network ; September 2015"),
-        horizonUrl: requireEnv("STELLAR_HORIZON_URL", "https://horizon-testnet.stellar.org"),
+        rpcUrl: requireEnv("STELLAR_RPC_URL", "https://mainnet.sorobanrpc.com"),
+        networkPassphrase: requireEnv("STELLAR_NETWORK_PASSPHRASE", "Public Global Stellar Network ; September 2015"),
+        horizonUrl: requireEnv("STELLAR_HORIZON_URL", "https://horizon.stellar.org"),
     },
     contracts: {
-        sxlmTokenContractId: requireEnv("SXLM_TOKEN_CONTRACT_ID", "CCSST2JJPO2XX7XKPIEZBVE3YVT3OKVZWVOOCUULQYM2YTXRQYS24DUA"),
-        stakingContractId: requireEnv("STAKING_CONTRACT_ID", "CBTSQ6AVMK63LXF3BA7WREUGXX2QYYQXKIO7KPZXCEAEAKRVWJS7J7K3"),
-        lendingContractId: requireEnv("LENDING_CONTRACT_ID", "CBY22XHGAIXFK5RROK4UAFC3BQH5D3ZKA3F2SWURHISB44EXXOYDAHYO"),
-        lpPoolContractId: requireEnv("LP_POOL_CONTRACT_ID", "CDDYQEF74BJ2D4D4SC5ZVWWFTWRP7APFHSPOLPRT7QIU5H6SGYN6KBIA"),
-        governanceContractId: requireEnv("GOVERNANCE_CONTRACT_ID", "CDGJP5AYMG2T5D3TZD5LGDO37SOF5LI3SPNOE2UBLLP7ZXANGB52CDS6"),
+        sxlmTokenContractId: requireEnv("SXLM_TOKEN_CONTRACT_ID", "CCGFHMW3NZD5Z7ATHYHZSEG6ABCJADUHP5HIAWFPR37CP4VGNEDQO7FJ"),
+        stakingContractId: requireEnv("STAKING_CONTRACT_ID", "CDYXKWVDGEVA6OSIGN7GRAPPRN6AKID35OJL5ZZQIBCMECZ35KGL45PS"),
+        lendingContractId: requireEnv("LENDING_CONTRACT_ID", "CAOWXZ6BWA2ZYY7GHD75OFKADKUJS4WCKPDYGGXULQWFJRB55TXAQNJG"),
+        lpPoolContractId: requireEnv("LP_POOL_CONTRACT_ID", "CAW2DRMOI3CCJWKVMEUWYJUEQHXB4S4DR72HNL2DWQCMQQUH3LFFVLHV"),
+        governanceContractId: requireEnv("GOVERNANCE_CONTRACT_ID", "CB7LV3FBQ7US26GVC7SM7RMX22IEEHAEUL7V3TDDWM32DHA5TDFDDEP4"),
     },
     server: {
         port: parseInt(requireEnv("PORT", "3001"), 10),
@@ -29,11 +29,12 @@ export const config = {
         url: requireEnv("DATABASE_URL", "postgresql://sxlm:sxlm_password@localhost:5432/sxlm_protocol"),
     },
     redis: {
-        url: requireEnv("REDIS_URL", "redis://localhost:6379"),
+        url: process.env["REDIS_URL"] ?? "",
     },
     admin: {
         secretKey: requireEnv("ADMIN_SECRET_KEY", ""),
-        publicKey: requireEnv("ADMIN_PUBLIC_KEY", ""),
+        // Fallback to known active mainnet account used for read-only Soroban simulations
+        publicKey: requireEnv("ADMIN_PUBLIC_KEY", "GDWXTIIROGCVBSNQMBJFH6HOWQ4YSRVMKSUS53CH6MP56WSWD6J4VZ5N"),
     },
     jwt: {
         secret: requireEnv("JWT_SECRET", "sxlm-dev-jwt-secret-change-in-production"),

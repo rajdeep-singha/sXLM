@@ -15,7 +15,7 @@ export class RestakingEngine {
     /**
      * Simulate N restaking loops with real math.
      */
-    simulate(principal, loops, collateralFactor = 0.7, stakingAPR = 0.06, borrowAPR = 0.04) {
+    simulate(principal, loops, collateralFactor = 0.7, stakingAPR = 0, borrowAPR = 0.04) {
         const steps = [];
         let totalStaked = 0;
         let totalBorrowed = 0;

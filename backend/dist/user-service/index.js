@@ -11,8 +11,14 @@ export class UserService {
     }
     async getWithdrawalsByWallet(wallet) {
         return this.prisma.withdrawal.findMany({
-            where: { wallet },
+            where: { wallet, status: { not: "claimed" } },
             orderBy: { createdAt: "desc" },
+        });
+    }
+    async markWithdrawalClaimed(wallet, withdrawalId) {
+        await this.prisma.withdrawal.updateMany({
+            where: { id: withdrawalId, wallet },
+            data: { status: "claimed" },
         });
     }
     async getStakingHistory(wallet) {

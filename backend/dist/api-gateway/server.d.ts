@@ -1,13 +1,11 @@
 import Fastify from "fastify";
 import { StakingEngine } from "../staking-engine/index.js";
-import { ValidatorService } from "../validator-service/index.js";
 import { RewardEngine } from "../reward-engine/index.js";
 import { UserService } from "../user-service/index.js";
 import { PrismaClient } from "@prisma/client";
 export interface GatewayDeps {
     prisma: PrismaClient;
     stakingEngine: StakingEngine;
-    validatorService: ValidatorService;
     rewardEngine: RewardEngine;
     userService: UserService;
 }

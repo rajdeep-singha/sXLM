@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { rpc, Contract, Address, nativeToScVal, TransactionBuilder, BASE_FEE, } from "@stellar/stellar-sdk";
+import { rpc, Contract, Address, nativeToScVal, TransactionBuilder, } from "@stellar/stellar-sdk";
 import { config } from "../../config/index.js";
 const stakeSchema = z.object({
     userAddress: z.string().min(56).max(56),
@@ -32,7 +32,7 @@ export const stakeRoutes = async (fastify, opts) => {
             const depositOp = contract.call("deposit", new Address(body.userAddress).toScVal(), nativeToScVal(xlmStroops, { type: "i128" }));
             const account = await server.getAccount(body.userAddress);
             const tx = new TransactionBuilder(account, {
-                fee: BASE_FEE,
+                fee: "2000000", // 0.2 XLM — assembleTransaction adds minResourceFee on top
                 networkPassphrase: config.stellar.networkPassphrase,
             })
                 .addOperation(depositOp)

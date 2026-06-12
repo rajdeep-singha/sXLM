@@ -55,7 +55,7 @@ export class LeverageEngine {
     /**
      * Calculate optimal leverage for given rates.
      */
-    optimal(stakingAPR = 0.06, borrowAPR = 0.04, collateralFactor = 0.7) {
+    optimal(stakingAPR = 0, borrowAPR = 0.04, collateralFactor = 0.7) {
         const maxLeverage = 1 / (1 - collateralFactor);
         // Find optimal loops (where marginal benefit < 0.1% of principal)
         let bestLoops = 1;

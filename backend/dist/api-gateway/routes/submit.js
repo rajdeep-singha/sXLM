@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { rpc, TransactionBuilder, Contract, Address, nativeToScVal, BASE_FEE, } from "@stellar/stellar-sdk";
+import { rpc, TransactionBuilder, Contract, Address, nativeToScVal, scValToNative, BASE_FEE, } from "@stellar/stellar-sdk";
 import { config } from "../../config/index.js";
 const submitSchema = z.object({
     signedXdr: z.string().min(1),
@@ -8,6 +8,38 @@ const claimSchema = z.object({
     userAddress: z.string().min(56).max(56),
     withdrawalId: z.string(),
 });
+/**
+ * Scan the staking contract's withdrawal queue to find the contract-side
+ * withdrawal ID for a given user address. The contract uses a global 0-based
+ * counter while the DB uses 1-based auto-increment, so they diverge for
+ * multi-user scenarios. Returns { id, entry } or null if not found.
+ */
+async function findContractWithdrawal(server, userAddress, maxScan = 50) {
+    const stakingContract = new Contract(config.contracts.stakingContractId);
+    const adminAccount = await server.getAccount(config.admin.publicKey);
+    for (let id = 0; id < maxScan; id++) {
+        try {
+            const tx = new TransactionBuilder(adminAccount, {
+                fee: BASE_FEE,
+                networkPassphrase: config.stellar.networkPassphrase,
+            })
+                .addOperation(stakingContract.call("get_withdrawal", nativeToScVal(id, { type: "u64" })))
+                .setTimeout(30)
+                .build();
+            const sim = await server.simulateTransaction(tx);
+            if (!rpc.Api.isSimulationSuccess(sim) || !sim.result)
+                break; // past end of queue
+            const entry = scValToNative(sim.result.retval);
+            if (entry.user === userAddress && !entry.claimed) {
+                return { id, entry };
+            }
+        }
+        catch {
+            break; // no more entries
+        }
+    }
+    return null;
+}
 export const submitRoutes = async (fastify, opts) => {
     const server = new rpc.Server(config.stellar.rpcUrl);
     /**
@@ -51,6 +83,7 @@ export const submitRoutes = async (fastify, opts) => {
                 txHash: hash,
                 status: confirmed.status,
                 ledger: confirmed.ledger,
+                pending: confirmed.pending ?? false,
             };
         }
         catch (err) {
@@ -61,15 +94,38 @@ export const submitRoutes = async (fastify, opts) => {
     /**
      * POST /staking/claim
      * Build an unsigned claim withdrawal transaction for user to sign.
+     *
+     * The contract uses a 0-based auto-increment counter for withdrawal IDs,
+     * but the frontend DB uses 1-based auto-increment IDs. To avoid mismatches,
+     * we scan the contract's withdrawal queue to find the correct contract-side
+     * ID for this user rather than blindly trusting the DB-provided withdrawalId.
      */
     fastify.post("/staking/claim", async (request, reply) => {
         try {
             const body = claimSchema.parse(request.body);
+            // Find the correct contract withdrawal ID by scanning the queue.
+            // Contract IDs start at 0 and auto-increment globally (not per-user).
+            const withdrawal = await findContractWithdrawal(server, body.userAddress);
+            if (withdrawal === null) {
+                return reply.status(400).send({
+                    error: "No unclaimed withdrawal found for your address. It may already be claimed or the cooldown has not started yet.",
+                });
+            }
+            // Check cooldown BEFORE simulation — Soroban panic messages don't
+            // surface as readable text, just "UnreachableCodeReached".
+            const latestLedger = await server.getLatestLedger();
+            if (latestLedger.sequence < withdrawal.entry.unlock_ledger) {
+                const remaining = withdrawal.entry.unlock_ledger - latestLedger.sequence;
+                const minsLeft = Math.ceil((remaining * 5) / 60);
+                return reply.status(400).send({
+                    error: `Cooldown not expired yet. Approximately ${minsLeft} minutes remaining (~${remaining} ledgers).`,
+                });
+            }
             const contract = new Contract(config.contracts.stakingContractId);
-            const claimOp = contract.call("claim_withdrawal", new Address(body.userAddress).toScVal(), nativeToScVal(Number(body.withdrawalId), { type: "u64" }));
+            const claimOp = contract.call("claim_withdrawal", new Address(body.userAddress).toScVal(), nativeToScVal(withdrawal.id, { type: "u64" }));
             const account = await server.getAccount(body.userAddress);
             const tx = new TransactionBuilder(account, {
-                fee: BASE_FEE,
+                fee: "2000000", // 0.2 XLM — assembleTransaction adds minResourceFee on top
                 networkPassphrase: config.stellar.networkPassphrase,
             })
                 .addOperation(claimOp)
@@ -85,6 +141,7 @@ export const submitRoutes = async (fastify, opts) => {
             return {
                 xdr: preparedTx.toXDR(),
                 networkPassphrase: config.stellar.networkPassphrase,
+                contractWithdrawalId: withdrawal.id,
             };
         }
         catch (err) {
@@ -96,31 +153,51 @@ export const submitRoutes = async (fastify, opts) => {
 /**
  * Poll for transaction confirmation using raw JSON-RPC to avoid SDK XDR
  * parse errors ("Bad union switch") that occur with newer protocol versions.
+ *
+ * Strategy: poll up to 60s with increasing back-off to survive rate limits.
+ * If still unconfirmed, return PENDING (not an error) so the frontend can
+ * show the hash and let the user verify manually.
  */
-async function pollTransaction(rpcUrl, hash, maxAttempts = 20, intervalMs = 2000) {
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        const rpcResponse = await fetch(rpcUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                jsonrpc: "2.0",
-                id: 1,
-                method: "getTransaction",
-                params: { hash },
-            }),
-        });
-        const rpcResult = await rpcResponse.json();
+async function pollTransaction(rpcUrl, hash) {
+    // Poll schedule: 6×2s, then 6×4s, then 6×6s ≈ 72s total, 18 requests
+    const schedule = [
+        ...Array(6).fill(2000),
+        ...Array(6).fill(4000),
+        ...Array(6).fill(6000),
+    ];
+    for (const intervalMs of schedule) {
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        let rpcResult;
+        try {
+            const rpcResponse = await fetch(rpcUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    jsonrpc: "2.0",
+                    id: 1,
+                    method: "getTransaction",
+                    params: { hash },
+                }),
+            });
+            // If rate-limited (429), skip this attempt and wait the next interval
+            if (rpcResponse.status === 429)
+                continue;
+            rpcResult = await rpcResponse.json();
+        }
+        catch {
+            // Network error during poll — skip and retry
+            continue;
+        }
         const result = rpcResult.result;
         if (result?.status === "SUCCESS") {
             return { status: "SUCCESS", ledger: result.ledger };
         }
         if (result?.status === "FAILED") {
-            throw new Error(`Transaction ${hash} failed on-chain`);
+            throw new Error(`Transaction failed on-chain: ${result.errorResultXdr || "unknown error"}`);
         }
-        // NOT_FOUND means still pending — keep polling
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        // NOT_FOUND → still pending, keep waiting
     }
-    // Exhausted attempts — assume tx landed (it was accepted by the network)
-    return { status: "SUBMITTED" };
+    // Timed out — return PENDING so frontend shows success with hash
+    return { status: "PENDING", pending: true };
 }
 //# sourceMappingURL=submit.js.map

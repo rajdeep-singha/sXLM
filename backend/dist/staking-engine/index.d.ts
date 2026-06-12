@@ -1,7 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 export declare class StakingEngine {
     private prisma;
-    private delegationManager;
     constructor(prisma: PrismaClient);
     initialize(): Promise<void>;
     shutdown(): Promise<void>;
@@ -22,14 +21,6 @@ export declare class StakingEngine {
         failed: number;
         totalPendingAmount: bigint;
     }>;
-    getDelegationBreakdown(): Promise<{
-        pubkey: string;
-        allocatedStake: bigint;
-        performanceScore: number;
-        percentage: number;
-    }[]>;
-    getWeightedProtocolAPR(): Promise<number>;
-    rebalanceDelegations(): Promise<void>;
     /**
      * Fix #4: Recalculate pending withdrawal amounts after slashing.
      * When slashing reduces total_xlm, the exchange rate drops.

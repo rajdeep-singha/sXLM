@@ -12,6 +12,7 @@ export declare class UserService {
         status: string;
         createdAt: Date;
     }[]>;
+    markWithdrawalClaimed(wallet: string, withdrawalId: number): Promise<void>;
     getStakingHistory(wallet: string): Promise<{
         wallet: string;
         withdrawals: {

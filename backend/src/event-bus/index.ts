@@ -81,34 +81,50 @@ function deserializePayload(raw: string): unknown {
 }
 
 export class EventBus {
-  private publisher: Redis;
-  private subscriber: Redis;
+  private publisher: Redis | null;
+  private subscriber: Redis | null;
   private handlers: Map<string, Array<(data: unknown) => void | Promise<void>>>;
   private isConnected: boolean;
+  private useRedis: boolean;
 
   constructor() {
-    this.publisher = new Redis(config.redis.url, {
-      maxRetriesPerRequest: 3,
-      retryStrategy(times) {
-        const delay = Math.min(times * 200, 5000);
-        return delay;
-      },
-      lazyConnect: true,
-    });
-    this.subscriber = new Redis(config.redis.url, {
-      maxRetriesPerRequest: 3,
-      retryStrategy(times) {
-        const delay = Math.min(times * 200, 5000);
-        return delay;
-      },
-      lazyConnect: true,
-    });
+    this.useRedis = config.redis.url.length > 0;
+    this.publisher = this.useRedis
+      ? new Redis(config.redis.url, {
+          maxRetriesPerRequest: 3,
+          retryStrategy(times) {
+            const delay = Math.min(times * 200, 5000);
+            return delay;
+          },
+          lazyConnect: true,
+        })
+      : null;
+    this.subscriber = this.useRedis
+      ? new Redis(config.redis.url, {
+          maxRetriesPerRequest: 3,
+          retryStrategy(times) {
+            const delay = Math.min(times * 200, 5000);
+            return delay;
+          },
+          lazyConnect: true,
+        })
+      : null;
     this.handlers = new Map();
     this.isConnected = false;
   }
 
   async connect(): Promise<void> {
     if (this.isConnected) return;
+
+    if (!this.useRedis) {
+      this.isConnected = true;
+      console.log("[EventBus] Using in-memory pub/sub");
+      return;
+    }
+
+    if (!this.publisher || !this.subscriber) {
+      throw new Error("[EventBus] Redis clients were not initialized.");
+    }
 
     await Promise.all([this.publisher.connect(), this.subscriber.connect()]);
 
@@ -117,18 +133,7 @@ export class EventBus {
       if (!channelHandlers) return;
 
       const data = deserializePayload(message);
-      for (const handler of channelHandlers) {
-        try {
-          const result = handler(data);
-          if (result instanceof Promise) {
-            result.catch((err) =>
-              console.error(`[EventBus] Handler error on ${channel}:`, err)
-            );
-          }
-        } catch (err) {
-          console.error(`[EventBus] Sync handler error on ${channel}:`, err);
-        }
-      }
+      this.dispatch(channel, data);
     });
 
     this.isConnected = true;
@@ -142,6 +147,16 @@ export class EventBus {
     if (!this.isConnected) {
       throw new Error("[EventBus] Not connected. Call connect() first.");
     }
+
+    if (!this.useRedis) {
+      this.dispatch(channel, data);
+      return this.handlers.get(channel)?.length ?? 0;
+    }
+
+    if (!this.publisher) {
+      throw new Error("[EventBus] Redis publisher was not initialized.");
+    }
+
     const serialized = serializePayload(data);
     const receivers = await this.publisher.publish(channel, serialized);
     console.log(
@@ -163,7 +178,12 @@ export class EventBus {
       existing.push(callback as (data: unknown) => void | Promise<void>);
     } else {
       this.handlers.set(channel, [callback as (data: unknown) => void | Promise<void>]);
-      await this.subscriber.subscribe(channel);
+      if (this.useRedis) {
+        if (!this.subscriber) {
+          throw new Error("[EventBus] Redis subscriber was not initialized.");
+        }
+        await this.subscriber.subscribe(channel);
+      }
     }
 
     console.log(`[EventBus] Subscribed to ${channel}`);
@@ -171,17 +191,45 @@ export class EventBus {
 
   async unsubscribe(channel: string): Promise<void> {
     this.handlers.delete(channel);
-    await this.subscriber.unsubscribe(channel);
+    if (this.useRedis) {
+      if (!this.subscriber) {
+        throw new Error("[EventBus] Redis subscriber was not initialized.");
+      }
+      await this.subscriber.unsubscribe(channel);
+    }
     console.log(`[EventBus] Unsubscribed from ${channel}`);
   }
 
   async disconnect(): Promise<void> {
     if (!this.isConnected) return;
     this.handlers.clear();
-    await this.subscriber.quit();
-    await this.publisher.quit();
+    if (this.useRedis) {
+      if (!this.subscriber || !this.publisher) {
+        throw new Error("[EventBus] Redis clients were not initialized.");
+      }
+      await this.subscriber.quit();
+      await this.publisher.quit();
+    }
     this.isConnected = false;
     console.log("[EventBus] Disconnected");
+  }
+
+  private dispatch(channel: string, data: unknown): void {
+    const channelHandlers = this.handlers.get(channel);
+    if (!channelHandlers) return;
+
+    for (const handler of channelHandlers) {
+      try {
+        const result = handler(data);
+        if (result instanceof Promise) {
+          result.catch((err) =>
+            console.error(`[EventBus] Handler error on ${channel}:`, err)
+          );
+        }
+      } catch (err) {
+        console.error(`[EventBus] Sync handler error on ${channel}:`, err);
+      }
+    }
   }
 }
 
