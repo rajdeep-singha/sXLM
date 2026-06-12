@@ -227,6 +227,23 @@ xlmLR/
 - **Frontend:** Build with `npm run build` and serve the `dist/` output with any static host; set `VITE_API_URL` to your backend URL.
 - **Contracts:** Deploy each contract to your target Stellar network and record contract IDs in backend and frontend env.
 
+## CI/CD
+
+GitHub Actions runs backend and frontend checks on pull requests. Pushes to `main` run the same checks, then deploy the backend to Render and the frontend to Vercel.
+
+Required GitHub repository secrets:
+
+| Secret | Used for |
+|--------|----------|
+| `RENDER_BACKEND_DEPLOY_HOOK_URL` | Render backend deploy hook |
+| `VERCEL_TOKEN` | Vercel CLI authentication |
+| `VERCEL_ORG_ID` | Vercel team/user ID |
+| `VERCEL_PROJECT_ID` | Vercel frontend project ID |
+
+Backend production environment variables belong in Render. Frontend production environment variables belong in Vercel. Do not commit local `.env` files.
+
+If Vercel's Git integration is also connected to this repository, disable automatic production deploys there to avoid duplicate deploys from both Vercel and GitHub Actions.
+
 ---
 
 ## License
