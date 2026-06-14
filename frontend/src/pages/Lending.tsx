@@ -41,18 +41,10 @@ export default function Lending() {
 
     let success = false;
     switch (activeTab) {
-      case 'deposit':
-        success = await depositCollateral(val);
-        break;
-      case 'withdraw':
-        success = await withdrawCollateral(val);
-        break;
-      case 'borrow':
-        success = await borrow(val);
-        break;
-      case 'repay':
-        success = await repay(val);
-        break;
+      case 'deposit':  success = await depositCollateral(val); break;
+      case 'withdraw': success = await withdrawCollateral(val); break;
+      case 'borrow':   success = await borrow(val); break;
+      case 'repay':    success = await repay(val); break;
     }
     if (success) setAmount('');
   };
@@ -66,10 +58,11 @@ export default function Lending() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4 space-y-6">
-      <div className="text-center">
-        <h1 className="text-3xl font-bold text-white mb-2">Lending</h1>
-        <p className="text-gray-400">Use sXLM as collateral to borrow XLM</p>
+    <div className="max-w-4xl mx-auto px-4 py-10 space-y-6">
+      <div>
+        <p className="text-[11px] uppercase tracking-widest mb-2 text-gray-400">Lending</p>
+        <h1 className="text-2xl font-semibold text-black mb-1" style={{ letterSpacing: '-0.02em' }}>Lending</h1>
+        <p className="text-sm text-gray-500">Use sXLM as collateral to borrow XLM</p>
       </div>
 
       {/* Protocol Stats */}
@@ -80,52 +73,52 @@ export default function Lending() {
           { label: 'Collateral Factor', value: (stats.collateralFactorBps / 100) + '%' },
           { label: 'Borrow Rate', value: (stats.borrowRateBps / 100) + '% APR' },
         ].map((stat) => (
-          <div key={stat.label} className="glass rounded-xl p-4 text-center">
-            <p className="text-xs text-gray-400">{stat.label}</p>
-            <p className={`text-lg font-bold mt-1 ${stat.highlight ? 'text-yellow-400' : 'text-white'}`}>{stat.value}</p>
+          <div key={stat.label} className="card p-4 text-center">
+            <p className="text-xs text-gray-500">{stat.label}</p>
+            <p className={`text-lg font-semibold mt-1 ${stat.highlight ? 'text-black' : 'text-black'}`}>{stat.value}</p>
           </div>
         ))}
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
         {/* Position Card */}
-        <div className="glass rounded-2xl p-6 space-y-4">
+        <div className="card p-6 space-y-4">
           <div className="flex items-center gap-2">
-            <Shield className="w-5 h-5 text-yellow-400" />
-            <h3 className="text-sm font-semibold text-white">Your Position</h3>
+            <Shield className="w-5 h-5 text-black" />
+            <h3 className="text-sm font-semibold text-black">Your Position</h3>
           </div>
           {isLoading ? (
-            <p className="text-sm text-gray-400">Loading...</p>
+            <p className="text-sm text-gray-400">Loading…</p>
           ) : (
             <div className="space-y-3">
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Collateral Deposited</span>
-                <span className="text-white">{formatXLM(position.sxlmDeposited)} sXLM</span>
+                <span className="text-gray-500">Collateral Deposited</span>
+                <span className="text-black">{formatXLM(position.sxlmDeposited)} sXLM</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">XLM Borrowed</span>
-                <span className="text-white">{formatXLM(position.xlmBorrowed)} XLM</span>
+                <span className="text-gray-500">XLM Borrowed</span>
+                <span className="text-black">{formatXLM(position.xlmBorrowed)} XLM</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Health Factor</span>
+                <span className="text-gray-500">Health Factor</span>
                 <span className={`font-bold ${
-                  position.healthFactor > 1.5 ? 'text-green-400' :
-                  position.healthFactor > 1.0 ? 'text-yellow-400' : 'text-red-400'
+                  position.healthFactor > 1.5 ? 'text-green-600' :
+                  position.healthFactor > 1.0 ? 'text-orange-500' : 'text-red-500'
                 }`}>
-                  {position.healthFactor > 0 ? position.healthFactor.toFixed(2) : '\u2014'}
+                  {position.healthFactor > 0 ? position.healthFactor.toFixed(2) : '—'}
                 </span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Max Borrow</span>
-                <span className="text-white">{formatXLM(position.maxBorrow)} XLM</span>
+                <span className="text-gray-500">Max Borrow</span>
+                <span className="text-black">{formatXLM(position.maxBorrow)} XLM</span>
               </div>
             </div>
           )}
 
           {position.healthFactor > 0 && position.healthFactor < 1.2 && (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
-              <AlertTriangle className="w-4 h-4 text-red-400" />
-              <span className="text-xs text-red-400">
+            <div className="flex items-center gap-2 p-3 rounded-xl bg-red-50 border border-red-200">
+              <AlertTriangle className="w-4 h-4 text-red-500" />
+              <span className="text-xs text-red-600">
                 Health factor is low. Consider repaying debt or adding collateral.
               </span>
             </div>
@@ -133,16 +126,16 @@ export default function Lending() {
         </div>
 
         {/* Action Card */}
-        <div className="glass rounded-2xl p-6 space-y-4">
-          <div className="flex gap-1 bg-white/5 rounded-lg p-1">
+        <div className="card p-6 space-y-4">
+          <div className="flex gap-1 bg-[#F5F5F5] rounded-xl p-1">
             {(['deposit', 'withdraw', 'borrow', 'repay', 'liquidate'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => { setActiveTab(tab); setAmount(''); setBorrowerAddress(''); clearError(); }}
-                className={`flex-1 py-2 rounded-md text-xs font-medium transition-all ${
+                className={`flex-1 py-2 rounded-lg text-xs font-medium transition-all ${
                   activeTab === tab
-                    ? 'bg-yellow-400/10 text-white border border-yellow-400/20'
-                    : 'text-gray-400 hover:text-white'
+                    ? 'bg-black text-white'
+                    : 'text-gray-500 hover:text-black'
                 }`}
               >
                 {tab === 'liquidate' ? (
@@ -156,23 +149,22 @@ export default function Lending() {
             ))}
           </div>
 
-          {/* Step 1 reminder: must deposit before borrow/withdraw/repay */}
           {(activeTab === 'borrow' || activeTab === 'withdraw' || activeTab === 'repay') && position.sxlmDeposited === 0 && (
-            <div className="rounded-lg p-3 text-xs" style={{ background: 'rgba(245,207,0,0.06)', border: '1px solid rgba(245,207,0,0.2)' }}>
-              <p style={{ color: '#F5CF00' }} className="font-medium mb-1">Step 1 required: Deposit sXLM first</p>
-              <p className="text-gray-400">You have no collateral deposited. Switch to the <strong className="text-white">Deposit</strong> tab, deposit your sXLM, then come back to borrow.</p>
+            <div className="rounded-xl p-3 text-xs bg-[#F5F5F5] border border-[#e5e5e5]">
+              <p className="text-black font-medium mb-1">Step 1 required: Deposit sXLM first</p>
+              <p className="text-gray-500">You have no collateral deposited. Switch to the <strong className="text-black">Deposit</strong> tab, deposit your sXLM, then come back to borrow.</p>
             </div>
           )}
 
           {activeTab === 'liquidate' ? (
             <div>
-              <label className="text-xs text-gray-400 mb-1 block">Borrower Address to Liquidate</label>
+              <label className="label">Borrower Address to Liquidate</label>
               <input
                 type="text"
                 value={borrowerAddress}
                 onChange={(e) => setBorrowerAddress(e.target.value)}
                 placeholder="G..."
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500/50"
+                className="input"
               />
               <p className="text-xs text-gray-500 mt-2">
                 Liquidate positions with health factor below 1.0. You repay their debt and receive their collateral + 5% bonus.
@@ -180,7 +172,7 @@ export default function Lending() {
             </div>
           ) : (
             <div>
-              <label className="text-xs text-gray-400 mb-1 block">
+              <label className="label">
                 {activeTab === 'deposit' || activeTab === 'withdraw' ? 'sXLM Amount' : 'XLM Amount'}
               </label>
               {activeTab === 'borrow' && position.maxBorrow > 0 && (
@@ -191,28 +183,28 @@ export default function Lending() {
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 placeholder="0.00"
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500/50"
+                className="input font-mono"
               />
             </div>
           )}
 
           {error && (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-              <p className="text-xs text-red-400">{error}</p>
+            <div className="banner-error">
+              <p className="text-xs text-red-500">{error}</p>
             </div>
           )}
 
           {lastTxHash && (
-            <div className={`rounded-lg p-3 space-y-1 ${isPending ? 'bg-yellow-500/10 border border-yellow-500/20' : 'bg-green-500/10 border border-green-500/20'}`}>
-              <p className={`text-xs ${isPending ? 'text-yellow-400' : 'text-green-400'}`}>
+            <div className={isPending ? 'banner-warning space-y-1' : 'banner-success space-y-1'}>
+              <p className={`text-xs ${isPending ? 'text-gray-700' : 'text-green-600'}`}>
                 {isPending ? 'Transaction submitted — confirming on Stellar (may take a moment)' : 'Transaction successful!'}
               </p>
               <a
                 href={`https://stellar.expert/explorer/public/tx/${lastTxHash}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block text-[10px] font-mono truncate"
-                style={{ color: isPending ? '#F5CF00' : '#4ade80', opacity: 0.7 }}
+                className="block text-[10px] font-mono truncate text-gray-500"
+                style={{ opacity: 0.7 }}
               >
                 {lastTxHash}
               </a>
@@ -227,15 +219,12 @@ export default function Lending() {
                 (activeTab === 'liquidate' ? !borrowerAddress : (!amount || parseFloat(amount) <= 0)) ||
                 (['borrow', 'withdraw', 'repay'].includes(activeTab) && position.sxlmDeposited === 0)
               }
-              className="w-full py-3 rounded-xl font-semibold hover:opacity-90 transition-opacity disabled:opacity-40 text-black" style={{ background: '#F5CF00' }}
+              className="w-full btn"
             >
-              {isSubmitting ? 'Processing...' : buttonLabels[activeTab]}
+              {isSubmitting ? 'Processing…' : buttonLabels[activeTab]}
             </button>
           ) : (
-            <button
-              onClick={connect}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 text-white font-semibold"
-            >
+            <button onClick={connect} className="w-full btn">
               Connect Wallet
             </button>
           )}
@@ -243,18 +232,18 @@ export default function Lending() {
       </div>
 
       {/* Info */}
-      <div className="glass rounded-2xl p-6 space-y-4">
+      <div className="card p-6 space-y-4">
         <div className="flex items-center gap-2">
-          <TrendingUp className="w-5 h-5 text-yellow-400" />
-          <h3 className="text-sm font-semibold text-white">How Lending Works</h3>
+          <TrendingUp className="w-5 h-5 text-black" />
+          <h3 className="text-sm font-semibold text-black">How Lending Works</h3>
         </div>
-        <div className="space-y-3 text-sm text-gray-400">
+        <div className="space-y-3 text-sm text-gray-500">
           <p>1. Deposit sXLM as collateral into the lending contract.</p>
           <p>2. Borrow up to {stats.collateralFactorBps / 100}% of your collateral value in XLM.</p>
           <p>3. Your Health Factor must stay above 1.0 to avoid liquidation.</p>
           <p>4. Repay your borrowed XLM to unlock your sXLM collateral.</p>
           <p>5. Liquidators can repay unhealthy positions and receive collateral + 5% bonus.</p>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-gray-400">
             Liquidation threshold: {stats.liquidationThresholdBps / 100}%. Borrow rate: {stats.borrowRateBps / 100}% APR.
           </p>
         </div>

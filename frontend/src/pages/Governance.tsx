@@ -4,6 +4,12 @@ import { useWallet } from '../hooks/useWallet';
 import { useGovernance } from '../hooks/useGovernance';
 import { formatAddress } from '../utils/stellar';
 
+function formatXLMVotes(amount: number): string {
+  if (amount >= 1_000_000) return `${(amount / 1_000_000).toFixed(1)}M`;
+  if (amount >= 1_000) return `${(amount / 1_000).toFixed(1)}K`;
+  return amount.toFixed(0);
+}
+
 export default function Governance() {
   const { isConnected, connect } = useWallet();
   const {
@@ -46,13 +52,13 @@ export default function Governance() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'active':
-        return <span className="px-2 py-1 rounded-full text-xs bg-yellow-400/10 text-yellow-400 border border-yellow-400/20">Active</span>;
+        return <span className="px-2 py-1 rounded-full text-xs bg-black text-white">Active</span>;
       case 'passed':
-        return <span className="px-2 py-1 rounded-full text-xs bg-green-500/20 text-green-400 border border-green-500/30">Passed</span>;
+        return <span className="px-2 py-1 rounded-full text-xs bg-green-100 text-green-700 border border-green-200">Passed</span>;
       case 'rejected':
-        return <span className="px-2 py-1 rounded-full text-xs bg-red-500/20 text-red-400 border border-red-500/30">Rejected</span>;
+        return <span className="px-2 py-1 rounded-full text-xs bg-red-100 text-red-700 border border-red-200">Rejected</span>;
       case 'executed':
-        return <span className="px-2 py-1 rounded-full text-xs bg-purple-500/20 text-purple-400 border border-purple-500/30">Executed</span>;
+        return <span className="px-2 py-1 rounded-full text-xs bg-[#2B2644]/10 text-[#2B2644] border border-[#2B2644]/20">Executed</span>;
       default:
         return null;
     }
@@ -61,84 +67,73 @@ export default function Governance() {
   const activeCount = proposals.filter(p => p.status === 'active').length;
 
   return (
-    <div className="max-w-4xl mx-auto px-4 space-y-6">
-      <div className="text-center">
-        <h1 className="text-3xl font-bold text-white mb-2">Governance</h1>
-        <p className="text-gray-400">Vote on protocol parameter changes with sXLM</p>
+    <div className="max-w-4xl mx-auto px-4 py-10 space-y-6">
+      <div>
+        <p className="text-[11px] uppercase tracking-widest mb-2 text-gray-400">DAO</p>
+        <h1 className="text-2xl font-semibold text-black mb-1" style={{ letterSpacing: '-0.02em' }}>Governance</h1>
+        <p className="text-sm text-gray-500">Vote on protocol parameter changes with sXLM</p>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        <div className="glass rounded-xl p-4 text-center">
-          <p className="text-xs text-gray-400">Total Proposals</p>
-          <p className="text-lg font-bold text-white mt-1">{isLoading ? '...' : proposals.length}</p>
+        <div className="card p-4 text-center">
+          <p className="text-xs text-gray-500">Total Proposals</p>
+          <p className="text-lg font-semibold text-black mt-1">{isLoading ? '…' : proposals.length}</p>
         </div>
-        <div className="glass rounded-xl p-4 text-center">
-          <p className="text-xs text-gray-400">Active Proposals</p>
-          <p className="text-lg font-bold text-white mt-1">{isLoading ? '...' : activeCount}</p>
+        <div className="card p-4 text-center">
+          <p className="text-xs text-gray-500">Active Proposals</p>
+          <p className="text-lg font-semibold text-black mt-1">{isLoading ? '…' : activeCount}</p>
         </div>
-        <div className="glass rounded-xl p-4 text-center">
-          <p className="text-xs text-gray-400">Quorum Required</p>
-          <p className="text-lg font-bold text-white mt-1">10%</p>
+        <div className="card p-4 text-center">
+          <p className="text-xs text-gray-500">Quorum Required</p>
+          <p className="text-lg font-semibold text-black mt-1">10%</p>
         </div>
       </div>
 
       {/* Governable Params */}
       {params.length > 0 && (
-        <div className="glass rounded-2xl p-6 space-y-3">
-          <h3 className="text-sm font-semibold text-white">Governable Parameters</h3>
+        <div className="card p-6 space-y-3">
+          <h3 className="text-sm font-semibold text-black">Governable Parameters</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {params.map((p) => (
-              <div key={p.key} className="bg-white/5 rounded-xl p-3">
-                <p className="text-xs text-gray-400">{p.description}</p>
-                <p className="text-sm text-white font-medium mt-1">{p.key}: <span className="text-yellow-400">{p.currentValue}</span></p>
+              <div key={p.key} className="bg-[#F5F5F5] rounded-xl p-3">
+                <p className="text-xs text-gray-500">{p.description}</p>
+                <p className="text-sm text-black font-medium mt-1">{p.key}: <span className="font-semibold">{p.currentValue}</span></p>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Error / Success Messages */}
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-          <p className="text-xs text-red-400">{error}</p>
-        </div>
-      )}
-      {lastTxHash && (
-        <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-3">
-          <p className="text-xs text-green-400">Transaction successful!</p>
-        </div>
-      )}
+      {error && <div className="banner-error"><p className="text-xs text-red-500">{error}</p></div>}
+      {lastTxHash && <div className="banner-success"><p className="text-xs text-green-600">Transaction successful!</p></div>}
 
       {/* Create Proposal */}
       <div className="flex justify-end">
         {isConnected ? (
           <button
             onClick={() => setShowCreateForm(!showCreateForm)}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-yellow-400/10 text-yellow-400 border border-yellow-400/20 hover:bg-yellow-400/15 transition-colors text-sm font-medium"
+            className="flex items-center gap-2 btn"
           >
             <Plus className="w-4 h-4" />
             Create Proposal
           </button>
         ) : (
-          <button
-            onClick={connect}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-yellow-400/10 text-yellow-400 border border-yellow-400/20 text-sm font-medium"
-          >
+          <button onClick={connect} className="btn">
             Connect Wallet to Propose
           </button>
         )}
       </div>
 
       {showCreateForm && (
-        <div className="glass rounded-2xl p-6 space-y-4 border border-yellow-400/15">
-          <h3 className="text-sm font-semibold text-white">New Proposal</h3>
+        <div className="card p-6 space-y-4">
+          <h3 className="text-sm font-semibold text-black">New Proposal</h3>
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">Parameter</label>
+            <label className="label">Parameter</label>
             <select
               value={paramKey}
               onChange={(e) => setParamKey(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-primary-500/50"
+              className="input"
             >
               {params.map((p) => (
                 <option key={p.key} value={p.key}>{p.description} ({p.key})</option>
@@ -154,38 +149,38 @@ export default function Governance() {
             </select>
           </div>
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">New Value</label>
+            <label className="label">New Value</label>
             <input
               type="text"
               value={newValue}
               onChange={(e) => setNewValue(e.target.value)}
               placeholder="Enter new value"
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500/50"
+              className="input"
             />
           </div>
           <p className="text-xs text-gray-500">Minimum 100 sXLM balance required to create a proposal.</p>
           <button
             onClick={handleCreateProposal}
             disabled={isSubmitting || !newValue}
-            className="w-full py-3 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 text-white font-semibold hover:opacity-90 transition-opacity disabled:opacity-40"
+            className="w-full btn"
           >
-            {isSubmitting ? 'Submitting...' : 'Submit Proposal'}
+            {isSubmitting ? 'Submitting…' : 'Submit Proposal'}
           </button>
         </div>
       )}
 
       {/* Proposals List */}
       <div className="space-y-4">
-        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-          <Vote className="w-4 h-4 text-yellow-400" />
+        <h3 className="text-sm font-semibold text-black flex items-center gap-2">
+          <Vote className="w-4 h-4" />
           Proposals
         </h3>
 
         {isLoading ? (
-          <p className="text-sm text-gray-400">Loading proposals...</p>
+          <p className="text-sm text-gray-500">Loading proposals…</p>
         ) : proposals.length === 0 ? (
-          <div className="glass rounded-2xl p-8 text-center">
-            <p className="text-gray-400">No proposals yet. Be the first to create one!</p>
+          <div className="card p-8 text-center">
+            <p className="text-gray-500">No proposals yet. Be the first to create one!</p>
           </div>
         ) : (
           proposals.map((proposal) => {
@@ -195,20 +190,20 @@ export default function Governance() {
             const forPercent = totalVotes > 0 ? (votesFor / totalVotes) * 100 : 50;
 
             return (
-              <div key={proposal.id} className="glass rounded-2xl p-6 space-y-4">
+              <div key={proposal.id} className="card p-6 space-y-4">
                 <div className="flex items-start justify-between">
                   <div>
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-white font-medium text-sm">
+                      <span className="text-black font-medium text-sm">
                         #{proposal.id}: Change {proposal.paramKey}
                       </span>
                       {getStatusBadge(proposal.status)}
                     </div>
-                    <p className="text-xs text-gray-400">
-                      Proposed by {formatAddress(proposal.proposer)} &bull; New value: <span className="text-white">{proposal.newValue}</span>
+                    <p className="text-xs text-gray-500">
+                      Proposed by {formatAddress(proposal.proposer)} · New value: <span className="text-black font-medium">{proposal.newValue}</span>
                     </p>
                   </div>
-                  <div className="flex items-center gap-1 text-xs text-gray-500">
+                  <div className="flex items-center gap-1 text-xs text-gray-400">
                     <Clock className="w-3 h-3" />
                     {proposal.status === 'active' ? 'Voting' : proposal.status}
                   </div>
@@ -217,51 +212,49 @@ export default function Governance() {
                 {/* Vote Bar */}
                 <div>
                   <div className="flex justify-between text-xs mb-1">
-                    <span className="text-green-400 flex items-center gap-1">
+                    <span className="text-green-600 flex items-center gap-1">
                       <CheckCircle className="w-3 h-3" />
                       For: {formatXLMVotes(votesFor)} ({forPercent.toFixed(0)}%)
                     </span>
-                    <span className="text-red-400 flex items-center gap-1">
+                    <span className="text-red-500 flex items-center gap-1">
                       Against: {formatXLMVotes(votesAgainst)} ({(100 - forPercent).toFixed(0)}%)
                       <XCircle className="w-3 h-3" />
                     </span>
                   </div>
-                  <div className="h-2 rounded-full bg-white/5 overflow-hidden">
+                  <div className="h-2 rounded-full bg-[#e5e5e5] overflow-hidden">
                     <div
-                      className="h-full rounded-full bg-gradient-to-r from-green-500 to-green-400"
+                      className="h-full rounded-full bg-green-500"
                       style={{ width: `${forPercent}%` }}
                     />
                   </div>
                 </div>
 
-                {/* Vote Actions */}
                 {proposal.status === 'active' && isConnected && (
                   <div className="flex gap-3">
                     <button
                       onClick={() => handleVote(proposal.id, true)}
                       disabled={isSubmitting}
-                      className="flex-1 py-2 rounded-xl bg-green-500/10 text-green-400 border border-green-500/20 hover:bg-green-500/20 transition-colors text-sm font-medium disabled:opacity-40"
+                      className="flex-1 py-2 rounded-xl bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 transition-colors text-sm font-medium disabled:opacity-40"
                     >
-                      {isSubmitting ? '...' : 'Vote For'}
+                      {isSubmitting ? '…' : 'Vote For'}
                     </button>
                     <button
                       onClick={() => handleVote(proposal.id, false)}
                       disabled={isSubmitting}
-                      className="flex-1 py-2 rounded-xl bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors text-sm font-medium disabled:opacity-40"
+                      className="flex-1 py-2 rounded-xl bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition-colors text-sm font-medium disabled:opacity-40"
                     >
-                      {isSubmitting ? '...' : 'Vote Against'}
+                      {isSubmitting ? '…' : 'Vote Against'}
                     </button>
                   </div>
                 )}
 
-                {/* Execute button: only show for passed proposals (voting ended, not yet executed) */}
                 {proposal.status === 'passed' && !proposal.executed && isConnected && (
                   <button
                     onClick={() => handleExecute(proposal.id)}
                     disabled={isSubmitting}
-                    className="w-full py-2 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 hover:bg-purple-500/20 transition-colors text-sm font-medium disabled:opacity-40"
+                    className="w-full py-2 rounded-xl bg-[#2B2644]/10 text-[#2B2644] border border-[#2B2644]/20 hover:bg-[#2B2644]/15 transition-colors text-sm font-medium disabled:opacity-40"
                   >
-                    {isSubmitting ? 'Executing...' : 'Execute Proposal'}
+                    {isSubmitting ? 'Executing…' : 'Execute Proposal'}
                   </button>
                 )}
               </div>
@@ -271,10 +264,4 @@ export default function Governance() {
       </div>
     </div>
   );
-}
-
-function formatXLMVotes(amount: number): string {
-  if (amount >= 1_000_000) return `${(amount / 1_000_000).toFixed(1)}M`;
-  if (amount >= 1_000) return `${(amount / 1_000).toFixed(1)}K`;
-  return amount.toFixed(0);
 }

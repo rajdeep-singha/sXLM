@@ -32,10 +32,14 @@ export default function WalletButton() {
   if (!isConnected) {
     return (
       <div className="flex flex-col items-end gap-1">
-        <button onClick={connect} disabled={isConnecting} className="btn text-xs">
-          {isConnecting ? 'Connecting...' : 'Connect Wallet'}
+        <button
+          onClick={connect}
+          disabled={isConnecting}
+          className="btn text-sm"
+        >
+          {isConnecting ? 'Connecting…' : 'Connect Wallet'}
         </button>
-        {error && <p className="text-xs text-red-400 max-w-[250px] text-right">{error}</p>}
+        {error && <p className="text-xs text-red-500 max-w-[250px] text-right">{error}</p>}
       </div>
     );
   }
@@ -44,85 +48,56 @@ export default function WalletButton() {
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setShowDropdown(!showDropdown)}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all duration-150"
-        style={{
-          border: '1px solid #1e1e1e',
-          background: showDropdown ? '#0d0d0d' : 'transparent',
-          color: '#ccc',
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgba(245,207,0,0.3)')}
-        onMouseLeave={(e) => (e.currentTarget.style.borderColor = showDropdown ? 'rgba(245,207,0,0.3)' : '#1e1e1e')}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-full text-sm border border-[#e5e5e5] bg-white hover:bg-gray-50 transition-colors duration-200"
       >
-        {/* Yellow pulsing dot for connected state */}
         <span
-          style={{
-            width: 6, height: 6, borderRadius: '50%',
-            background: '#F5CF00',
-            boxShadow: '0 0 6px rgba(245,207,0,0.6)',
-            animation: 'yellow-pulse 2.5s ease-in-out infinite',
-            display: 'inline-block',
-            flexShrink: 0,
-          }}
+          className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block flex-shrink-0"
+          style={{ boxShadow: '0 0 6px rgba(34,197,94,0.5)' }}
         />
-        <span className="font-mono" style={{ color: '#F5CF00', fontWeight: 600 }}>
+        <span className="font-mono font-semibold text-black">
           {balance.sxlmBalance.toFixed(2)} sXLM
         </span>
-        <span className="font-mono" style={{ color: '#444' }}>|</span>
-        <span className="font-mono" style={{ color: '#6b6b6b' }}>
+        <span className="text-gray-300">|</span>
+        <span className="font-mono text-gray-500">
           {formatAddress(publicKey || '')}
         </span>
       </button>
 
       {showDropdown && (
         <div
-          className="absolute right-0 top-full mt-2 w-60 rounded-xl p-2 z-50"
-          style={{
-            background: '#0d0d0d',
-            border: '1px solid #1e1e1e',
-            boxShadow: '0 16px 48px rgba(0,0,0,0.8)',
-          }}
+          className="absolute right-0 top-full mt-2 w-64 rounded-2xl p-2 z-50 border border-[#e5e5e5] bg-white"
+          style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.1)' }}
         >
           <div className="px-3 py-2 mb-1">
-            <p className="text-[10px] mb-1" style={{ color: '#525252' }}>Connected</p>
-            <p className="font-mono text-[10px] break-all" style={{ color: '#6b6b6b' }}>{publicKey}</p>
+            <p className="text-[10px] mb-1 text-gray-400">Connected</p>
+            <p className="font-mono text-[10px] break-all text-gray-500">{publicKey}</p>
 
-            {/* sXLM balance — primary */}
-            <div className="mt-2 pt-2" style={{ borderTop: '1px solid #1e1e1e' }}>
-              <p className="text-[10px] mb-0.5" style={{ color: '#525252' }}>sXLM Balance</p>
-              <p className="font-mono text-base font-bold" style={{ color: '#F5CF00' }}>
+            <div className="mt-2 pt-2 border-t border-[#e5e5e5]">
+              <p className="text-[10px] mb-0.5 text-gray-400">sXLM Balance</p>
+              <p className="font-mono text-base font-bold text-black">
                 {balance.sxlmBalance.toFixed(4)}
-                <span className="text-[10px] font-normal ml-1" style={{ color: '#525252' }}>sXLM</span>
+                <span className="text-[10px] font-normal ml-1 text-gray-400">sXLM</span>
               </p>
-              <p className="text-[10px] mt-0.5" style={{ color: '#383838' }}>
+              <p className="text-[10px] mt-0.5 text-gray-400">
                 ≈ {balance.xlmValue.toFixed(4)} XLM value
               </p>
             </div>
 
-            {/* XLM in wallet — secondary */}
-            <div className="mt-2 pt-2 flex justify-between items-center" style={{ borderTop: '1px solid #1e1e1e' }}>
-              <p className="text-[10px]" style={{ color: '#525252' }}>XLM in Wallet</p>
-              <p className="font-mono text-[11px]" style={{ color: '#6b6b6b' }}>
+            <div className="mt-2 pt-2 border-t border-[#e5e5e5] flex justify-between items-center">
+              <p className="text-[10px] text-gray-400">XLM in Wallet</p>
+              <p className="font-mono text-[11px] text-gray-500">
                 {balance.xlmNativeBalance.toFixed(4)}
-                <span className="text-[10px] ml-1" style={{ color: '#3a3a3a' }}>XLM</span>
+                <span className="text-[10px] ml-1 text-gray-400">XLM</span>
               </p>
             </div>
           </div>
 
           <button
             onClick={copyAddress}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors"
-            style={{ color: '#6b6b6b' }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
-              e.currentTarget.style.color = '#fff';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent';
-              e.currentTarget.style.color = '#6b6b6b';
-            }}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-gray-500 hover:bg-gray-50 hover:text-black transition-colors duration-150"
           >
             {copied
-              ? <Check className="w-3 h-3" style={{ color: '#4ade80' }} />
+              ? <Check className="w-3 h-3 text-green-500" />
               : <Copy className="w-3 h-3" />
             }
             {copied ? 'Copied!' : 'Copy Address'}
@@ -130,10 +105,7 @@ export default function WalletButton() {
 
           <button
             onClick={() => { disconnect(); setShowDropdown(false); }}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors"
-            style={{ color: '#f87171' }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(248,113,113,0.06)')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-red-500 hover:bg-red-50 transition-colors duration-150"
           >
             <LogOut className="w-3 h-3" />
             Disconnect

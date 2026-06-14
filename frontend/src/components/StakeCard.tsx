@@ -25,8 +25,8 @@ export default function StakeCard() {
   return (
     <div className="card p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-white">Stake XLM</h3>
-        <span className="tag-yellow">
+        <h3 className="text-sm font-semibold text-black">Stake XLM</h3>
+        <span className="tag-accent">
           {formatAPY(apy.currentApr)} APR
         </span>
       </div>
@@ -42,55 +42,51 @@ export default function StakeCard() {
         />
       </div>
 
-      <div className="flex items-center justify-center gap-3 text-neutral-700 text-xs">
-        <div className="flex-1 h-px bg-border" />
+      <div className="flex items-center justify-center gap-3 text-gray-400 text-xs">
+        <div className="flex-1 h-px bg-[#e5e5e5]" />
         <span>becomes</span>
-        <div className="flex-1 h-px bg-border" />
+        <div className="flex-1 h-px bg-[#e5e5e5]" />
       </div>
 
-      <div
-        className="rounded-lg p-4"
-        style={{ background: '#080808', border: '1px solid #1e1e1e' }}
-      >
+      <div className="rounded-xl p-4 bg-[#F5F5F5] border border-[#e5e5e5]">
         <p className="label">You receive (sXLM)</p>
-        <p className="font-mono text-xl font-semibold" style={{ color: '#F5CF00' }}>
+        <p className="font-mono text-xl font-semibold text-black">
           {sxlmReceive}
         </p>
       </div>
 
-      <div className="space-y-1.5 text-xs px-1" style={{ color: '#525252' }}>
+      <div className="space-y-1.5 text-xs px-1 text-gray-500">
         <div className="flex justify-between">
           <span>Exchange Rate</span>
-          <span className="text-neutral-400">1 sXLM = {stats.exchangeRate.toFixed(4)} XLM</span>
+          <span className="text-gray-700 font-mono">1 sXLM = {stats.exchangeRate.toFixed(4)} XLM</span>
         </div>
         {isConnected && (
           <div className="flex justify-between">
             <span>Available XLM</span>
-            <span className="text-neutral-400">{balance.xlmNativeBalance.toFixed(4)} XLM</span>
+            <span className="text-gray-700 font-mono">{balance.xlmNativeBalance.toFixed(4)} XLM</span>
           </div>
         )}
         {isConnected && balance.sxlmBalance > 0 && (
           <div className="flex justify-between">
             <span>Your sXLM</span>
-            <span className="font-mono" style={{ color: '#F5CF00' }}>{balance.sxlmBalance.toFixed(4)} sXLM</span>
+            <span className="font-mono text-black font-medium">{balance.sxlmBalance.toFixed(4)} sXLM</span>
           </div>
         )}
         <div className="flex justify-between">
           <span>30d APY</span>
-          <span className="text-neutral-400">{formatAPY(apy.apy30d)}</span>
+          <span className="text-gray-700">{formatAPY(apy.apy30d)}</span>
         </div>
       </div>
 
       {error && (
         <div className="banner-error space-y-2">
-          <p className="text-xs text-red-400">{error}</p>
+          <p className="text-xs text-red-500">{error}</p>
           {error.toLowerCase().includes('friendbot') && publicKey && (
             <a
               href={`${NETWORK.friendbotUrl}?addr=${publicKey}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="block text-center text-xs underline"
-              style={{ color: '#F5CF00' }}
+              className="block text-center text-xs underline text-black"
             >
               Fund your testnet account via Friendbot →
             </a>
@@ -99,8 +95,8 @@ export default function StakeCard() {
       )}
 
       {lastTxHash && (
-        <div className={isPending ? "banner-warning space-y-1" : "banner-success space-y-1"}>
-          <p className={`text-xs ${isPending ? 'text-yellow-400' : 'text-green-400'}`}>
+        <div className={isPending ? 'banner-warning space-y-1' : 'banner-success space-y-1'}>
+          <p className={`text-xs ${isPending ? 'text-gray-700' : 'text-green-600'}`}>
             {isPending
               ? 'Transaction submitted — confirming on Stellar (may take a moment)'
               : 'Staked successfully — sXLM minted to your wallet'}
@@ -109,8 +105,8 @@ export default function StakeCard() {
             href={`https://stellar.expert/explorer/public/tx/${lastTxHash}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="block text-[10px] font-mono truncate"
-            style={{ color: isPending ? '#F5CF00' : '#4ade80', opacity: 0.7 }}
+            className="block text-[10px] font-mono truncate text-gray-500"
+            style={{ opacity: 0.7 }}
           >
             {lastTxHash}
           </a>
@@ -123,7 +119,7 @@ export default function StakeCard() {
           disabled={isStaking || !xlmAmount || parseFloat(xlmAmount) <= 0}
           className="w-full btn"
         >
-          {isStaking ? 'Processing...' : 'Stake XLM'}
+          {isStaking ? 'Processing…' : 'Stake XLM'}
         </button>
       ) : (
         <button onClick={connect} className="w-full btn">

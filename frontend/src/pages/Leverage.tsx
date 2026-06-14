@@ -66,18 +66,19 @@ export default function Leverage() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4 space-y-6">
-      <div className="text-center">
-        <h1 className="text-3xl font-bold text-white mb-2">Leverage Simulator</h1>
-        <p className="text-gray-400">Calculate optimal leverage for sXLM staking yield</p>
+    <div className="max-w-4xl mx-auto px-4 py-10 space-y-6">
+      <div>
+        <p className="text-[11px] uppercase tracking-widest mb-2 text-gray-400">DeFi</p>
+        <h1 className="text-2xl font-semibold text-black mb-1" style={{ letterSpacing: '-0.02em' }}>Leverage Simulator</h1>
+        <p className="text-sm text-gray-500">Calculate optimal leverage for sXLM staking yield</p>
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
         {/* Input Card */}
-        <div className="glass rounded-2xl p-6 space-y-4">
+        <div className="card p-6 space-y-4">
           <div className="flex items-center gap-2">
-            <Calculator className="w-5 h-5 text-yellow-400" />
-            <h3 className="text-sm font-semibold text-white">Parameters</h3>
+            <Calculator className="w-5 h-5 text-black" />
+            <h3 className="text-sm font-semibold text-black">Parameters</h3>
           </div>
 
           {[
@@ -88,35 +89,27 @@ export default function Leverage() {
             { label: 'Borrow APR', value: borrowAPR, setter: setBorrowAPR },
           ].map(({ label, value, setter }) => (
             <div key={label}>
-              <label className="text-xs text-gray-400 mb-1 block">{label}</label>
+              <label className="label">{label}</label>
               <input
                 type="number"
                 value={value}
                 onChange={(e) => setter(e.target.value)}
                 step="any"
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500/50"
+                className="input font-mono"
               />
             </div>
           ))}
 
-          {error && (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-              <p className="text-xs text-red-400">{error}</p>
-            </div>
-          )}
+          {error && <div className="banner-error"><p className="text-xs text-red-500">{error}</p></div>}
 
           <div className="flex gap-3">
-            <button
-              onClick={handleSimulate}
-              disabled={isLoading}
-              className="flex-1 py-3 rounded-xl bg-gradient-to-r from-primary-500 to-accent-500 text-white font-semibold hover:opacity-90 transition-opacity disabled:opacity-40"
-            >
-              {isLoading ? 'Simulating...' : 'Simulate'}
+            <button onClick={handleSimulate} disabled={isLoading} className="flex-1 btn">
+              {isLoading ? 'Simulating…' : 'Simulate'}
             </button>
             <button
               onClick={handleOptimal}
               disabled={isLoading}
-              className="flex items-center gap-1 px-4 py-3 rounded-xl bg-yellow-400/10 text-yellow-400 border border-yellow-400/20 hover:bg-yellow-400/15 transition-colors text-sm font-medium disabled:opacity-40"
+              className="flex items-center gap-1 px-4 py-2.5 rounded-full border border-black text-black hover:bg-black hover:text-white transition-all duration-200 text-sm font-medium disabled:opacity-40"
             >
               <Zap className="w-4 h-4" /> Optimal
             </button>
@@ -124,10 +117,10 @@ export default function Leverage() {
         </div>
 
         {/* Results Card */}
-        <div className="glass rounded-2xl p-6 space-y-4">
+        <div className="card p-6 space-y-4">
           <div className="flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-yellow-400" />
-            <h3 className="text-sm font-semibold text-white">Results</h3>
+            <TrendingUp className="w-5 h-5 text-black" />
+            <h3 className="text-sm font-semibold text-black">Results</h3>
           </div>
 
           {result ? (
@@ -141,8 +134,8 @@ export default function Leverage() {
                 { label: 'Annual Return', value: result.netYield.toFixed(2) + ' XLM' },
               ].map(({ label, value }) => (
                 <div key={label} className="flex justify-between text-sm">
-                  <span className="text-gray-400">{label}</span>
-                  <span className="text-white font-medium">{value}</span>
+                  <span className="text-gray-500">{label}</span>
+                  <span className="text-black font-medium font-mono">{value}</span>
                 </div>
               ))}
             </div>
@@ -151,32 +144,30 @@ export default function Leverage() {
           )}
 
           {optimalResult && (
-            <div className="mt-4 p-4 rounded-xl bg-yellow-400/8 border border-yellow-400/15 space-y-2">
-              <p className="text-xs font-semibold text-yellow-400">Optimal Strategy</p>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Optimal Loops</span>
-                <span className="text-white">{optimalResult.optimalLoops}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Net Yield</span>
-                <span className="text-white">{optimalResult.netYieldPercent.toFixed(2)}%</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Leverage</span>
-                <span className="text-white">{optimalResult.maxLeverage.toFixed(2)}x</span>
-              </div>
+            <div className="mt-4 p-4 rounded-xl bg-[#F5F5F5] border border-[#e5e5e5] space-y-2">
+              <p className="text-xs font-semibold text-black">Optimal Strategy</p>
+              {[
+                { label: 'Optimal Loops', value: String(optimalResult.optimalLoops) },
+                { label: 'Net Yield', value: optimalResult.netYieldPercent.toFixed(2) + '%' },
+                { label: 'Leverage', value: optimalResult.maxLeverage.toFixed(2) + 'x' },
+              ].map(({ label, value }) => (
+                <div key={label} className="flex justify-between text-sm">
+                  <span className="text-gray-500">{label}</span>
+                  <span className="text-black font-mono">{value}</span>
+                </div>
+              ))}
             </div>
           )}
         </div>
       </div>
 
       {/* Formula Info */}
-      <div className="glass rounded-2xl p-6 space-y-4">
-        <h3 className="text-sm font-semibold text-white">How Leverage Works</h3>
-        <div className="space-y-2 text-sm text-gray-400">
-          <p>Leverage = 1 / (1 - c), where c = collateral factor</p>
-          <p>Net Yield = (Leverage x Staking APR) - ((Leverage - 1) x Borrow APR)</p>
-          <p>Example: c=0.7, r=APR%, b=4% → Leverage=3.33x, Net Yield=(L×r)−((L−1)×b)</p>
+      <div className="card p-6 space-y-4">
+        <h3 className="text-sm font-semibold text-black">How Leverage Works</h3>
+        <div className="space-y-2 text-sm text-gray-500">
+          <p>Leverage = 1 / (1 − c), where c = collateral factor</p>
+          <p>Net Yield = (Leverage × Staking APR) − ((Leverage − 1) × Borrow APR)</p>
+          <p>Example: c=0.7, r=APR%, b=4% → Leverage=3.33×, Net Yield=(L×r)−((L−1)×b)</p>
         </div>
       </div>
     </div>

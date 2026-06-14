@@ -2,218 +2,212 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Dashboard animations ─────────────────────────────────────────────────── */
+/* ── TT Norms Pro — commercial font; place woff2 files in /public/fonts/ ─── */
+@font-face {
+  font-family: 'TT Norms Pro';
+  src: url('/fonts/tt-norms-pro-regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
 
-@keyframes lido-reveal {
-  from { opacity: 0; transform: translateY(20px); }
+@font-face {
+  font-family: 'TT Norms Pro';
+  src: url('/fonts/tt-norms-pro-semibold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── Marquee keyframes ───────────────────────────────────────────────────── */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+@keyframes backers-marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+/* ── Reveal animation ────────────────────────────────────────────────────── */
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(16px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes lido-fade {
+@keyframes fade-in {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
 
-@keyframes stellar-rotate {
-  0%   { transform: perspective(600px) rotateY(0deg)   rotateX(6deg); }
-  100% { transform: perspective(600px) rotateY(360deg) rotateX(6deg); }
-}
+.reveal { animation: reveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.fade-in { animation: fade-in 0.7s ease both; }
 
-@keyframes stellar-float {
-  0%, 100% { transform: translateY(0px); }
-  50%       { transform: translateY(-10px); }
-}
-
-@keyframes yellow-pulse {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.4; }
-}
-
-.lido-reveal { animation: lido-reveal 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
-.lido-fade   { animation: lido-fade 0.7s ease both; }
-
-/* ── Responsive grids ────────────────────────────────────────────────────── */
-.lido-hero-grid  { display: grid; grid-template-columns: 1fr 380px; gap: 48px; align-items: center; }
-.lido-two-col    { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
-.lido-four-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; }
-.lido-stat-strip { display: flex; align-items: stretch; border-left: 1px solid #1e1e1e; }
-
-@media (max-width: 1000px) {
-  .lido-hero-grid  { grid-template-columns: 1fr; }
-  .lido-two-col    { grid-template-columns: 1fr; gap: 32px; }
-  .lido-four-cards { grid-template-columns: 1fr 1fr; }
-  .lido-stat-strip { flex-wrap: wrap; }
-}
-@media (max-width: 600px) {
-  .lido-four-cards { grid-template-columns: 1fr; }
-}
-
+/* ── Base ────────────────────────────────────────────────────────────────── */
 @layer base {
   html {
     scroll-behavior: smooth;
-    color-scheme: dark;
+    color-scheme: light;
   }
 
   body {
-    @apply bg-black text-white font-sans;
+    background: #F5F5F5;
+    color: #000;
+    font-family: 'TT Norms Pro', Inter, system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Yellow scrollbar */
-  ::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
+  * {
+    font-family: inherit;
   }
 
-  ::-webkit-scrollbar-track {
-    @apply bg-black;
-  }
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: #F5F5F5; }
+  ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.3); }
 
-  ::-webkit-scrollbar-thumb {
-    background: rgba(245, 207, 0, 0.4);
-    border-radius: 9999px;
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    background: rgba(245, 207, 0, 0.7);
-  }
-
-  /* Global yellow focus ring */
+  /* Focus ring */
   *:focus-visible {
-    outline: 2px solid #F5CF00;
+    outline: 2px solid #000;
     outline-offset: 2px;
   }
 
-  /* Remove default number input arrows */
+  /* Remove number input arrows */
   input[type='number']::-webkit-inner-spin-button,
   input[type='number']::-webkit-outer-spin-button {
     -webkit-appearance: none;
   }
 }
 
+/* ── Components ──────────────────────────────────────────────────────────── */
 @layer components {
-  /* ── Cards ──────────────────────────────────────────────────────────────── */
+
+  /* Cards */
   .card {
-    @apply border border-border rounded-xl;
-    background: rgba(10,10,10,0.88);
-    backdrop-filter: blur(8px);
+    @apply bg-white border border-[#e5e5e5] rounded-2xl;
     transition: border-color 0.2s, box-shadow 0.2s;
   }
-
   .card:hover {
-    border-color: rgba(245, 207, 0, 0.12);
-    box-shadow: 0 0 20px rgba(245, 207, 0, 0.04);
+    border-color: rgba(0,0,0,0.12);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.06);
   }
 
-  /* ── Buttons ─────────────────────────────────────────────────────────────── */
-
-  /* Primary: yellow bg · black text */
+  /* Primary button — black pill */
   .btn {
-    @apply px-5 py-2.5 rounded-lg font-semibold text-sm
-           transition-all duration-150
+    @apply px-5 py-2.5 rounded-full font-medium text-sm bg-black text-white
+           transition-colors duration-200
            disabled:opacity-40 disabled:cursor-not-allowed;
-    background: #F5CF00;
-    color: #000;
   }
   .btn:hover:not(:disabled) {
-    background: #D4A800;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 16px rgba(245, 207, 0, 0.25);
-  }
-  .btn:active:not(:disabled) {
-    background: #A38200;
-    transform: translateY(0);
-    box-shadow: none;
+    @apply bg-gray-800;
   }
 
-  /* Outline: white/15 border · white text · hover → yellow */
+  /* Outline button */
   .btn-outline {
-    @apply px-5 py-2.5 bg-transparent rounded-lg font-medium text-sm
-           border transition-all duration-150
+    @apply px-5 py-2.5 bg-transparent rounded-full font-medium text-sm
+           border border-black text-black
+           transition-all duration-200
            disabled:opacity-40 disabled:cursor-not-allowed;
-    border-color: rgba(255,255,255,0.15);
-    color: rgba(255,255,255,0.8);
   }
   .btn-outline:hover:not(:disabled) {
-    border-color: #F5CF00;
-    color: #F5CF00;
+    @apply bg-black text-white;
   }
 
-  /* Ghost: transparent · muted text · hover → white */
+  /* Ghost button */
   .btn-ghost {
-    @apply px-5 py-2.5 bg-transparent text-neutral-500 rounded-lg font-medium text-sm
-           transition-colors duration-150
+    @apply px-5 py-2.5 bg-transparent text-gray-500 rounded-full font-medium text-sm
+           transition-colors duration-200
            disabled:opacity-40 disabled:cursor-not-allowed;
   }
   .btn-ghost:hover:not(:disabled) {
-    @apply text-white;
+    @apply text-black;
   }
 
-  /* ── Inputs ──────────────────────────────────────────────────────────────── */
+  /* Pill button with trailing arrow — used in hero + info sections */
+  .btn-pill-arrow {
+    @apply inline-flex items-center gap-3 bg-black text-white font-medium
+           pl-8 pr-2 py-2 rounded-full transition-colors duration-200
+           hover:bg-gray-800;
+  }
+  .btn-pill-arrow .arrow-circle {
+    @apply w-9 h-9 rounded-full bg-white flex items-center justify-center
+           transition-colors duration-200;
+  }
+  .btn-pill-arrow:hover .arrow-circle {
+    @apply bg-gray-100;
+  }
+
+  /* Inputs */
   .input {
-    @apply w-full px-4 py-3 border rounded-lg
-           text-white placeholder-neutral-700
+    @apply w-full px-4 py-3 border border-[#e5e5e5] rounded-xl bg-white
+           text-black placeholder-gray-400
            transition-all duration-150 text-sm;
-    background: rgba(6,6,6,0.9);
-    border-color: #1e1e1e;
   }
   .input:focus {
     outline: none;
-    border-color: #F5CF00;
-    box-shadow: 0 0 0 3px rgba(245, 207, 0, 0.08);
+    border-color: #000;
+    box-shadow: 0 0 0 3px rgba(0,0,0,0.06);
   }
 
-  /* ── Labels ──────────────────────────────────────────────────────────────── */
+  /* Labels */
   .label {
-    @apply text-xs text-neutral-500 mb-1 block;
+    @apply text-xs text-gray-500 mb-1 block;
   }
 
-  /* ── Stat display ────────────────────────────────────────────────────────── */
+  /* Stat display */
   .stat-value {
-    @apply text-xl font-semibold text-white;
+    @apply text-xl font-semibold text-black;
   }
-
   .stat-label {
-    @apply text-xs text-neutral-500 uppercase tracking-wider;
+    @apply text-xs text-gray-500 uppercase tracking-wider;
   }
 
-  /* ── Glass ───────────────────────────────────────────────────────────────── */
-  .glass {
-    @apply backdrop-blur-sm border;
-    background: rgba(255,255,255,0.03);
-    border-color: rgba(255,255,255,0.08);
+  /* Badge */
+  .tag-accent {
+    @apply text-xs font-medium px-2 py-0.5 rounded-full
+           bg-black text-white;
   }
 
-  /* ── Yellow tag/badge ────────────────────────────────────────────────────── */
+  /* Keep old tag-yellow alias for backward compat (now styled as black) */
   .tag-yellow {
-    @apply text-xs font-medium px-2 py-0.5 rounded;
-    color: #F5CF00;
-    background: rgba(245, 207, 0, 0.1);
-    border: 1px solid rgba(245, 207, 0, 0.2);
+    @apply text-xs font-medium px-2 py-0.5 rounded-full
+           bg-black text-white;
   }
 
-  /* ── Success/Error banners ───────────────────────────────────────────────── */
+  /* Success/Error banners */
   .banner-success {
-    @apply rounded-lg p-3;
-    border: 1px solid rgba(74, 222, 128, 0.2);
-    background: rgba(74, 222, 128, 0.05);
+    @apply rounded-xl p-3;
+    border: 1px solid rgba(74, 222, 128, 0.3);
+    background: rgba(74, 222, 128, 0.07);
   }
-
   .banner-error {
-    @apply rounded-lg p-3;
-    border: 1px solid rgba(248, 113, 113, 0.2);
-    background: rgba(248, 113, 113, 0.05);
+    @apply rounded-xl p-3;
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    background: rgba(248, 113, 113, 0.07);
   }
-
   .banner-warning {
-    @apply rounded-lg p-3;
-    border: 1px solid rgba(245, 207, 0, 0.2);
-    background: rgba(245, 207, 0, 0.04);
+    @apply rounded-xl p-3;
+    border: 1px solid rgba(0,0,0,0.15);
+    background: rgba(0,0,0,0.03);
   }
 
-  /* ── Divider ─────────────────────────────────────────────────────────────── */
+  /* Divider */
   .divider {
-    @apply border-t border-border;
+    @apply border-t border-[#e5e5e5];
+  }
+
+  /* Marquee tracks */
+  .marquee-track {
+    display: flex;
+    width: max-content;
+    animation: marquee 22s linear infinite;
+  }
+  .backers-track {
+    display: flex;
+    width: max-content;
+    animation: backers-marquee 30s linear infinite;
   }
 }

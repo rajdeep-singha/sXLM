@@ -37,23 +37,23 @@ export default function ValidatorTable() {
 
   if (isLoading) {
     return (
-      <div className="card p-6 animate-pulse">
-        {[...Array(5)].map((_, i) => <div key={i} className="h-10 bg-white/5 rounded mb-2" />)}
+      <div className="card p-6 animate-pulse space-y-2">
+        {[...Array(5)].map((_, i) => <div key={i} className="h-10 bg-[#F5F5F5] rounded-xl" />)}
       </div>
     );
   }
 
   return (
     <div className="card overflow-hidden">
-      <div className="p-4 border-b border-border">
+      <div className="p-4 border-b border-[#e5e5e5]">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-600" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search validators..."
-            className="w-full pl-10 pr-4 py-2 bg-black border border-border rounded-lg text-sm text-white placeholder-neutral-600 outline-none focus:border-neutral-500"
+            placeholder="Search validators…"
+            className="input pl-10"
           />
         </div>
       </div>
@@ -61,7 +61,7 @@ export default function ValidatorTable() {
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
-            <tr className="text-left text-[11px] text-neutral-500 uppercase tracking-wider">
+            <tr className="text-left text-[11px] text-gray-400 uppercase tracking-wider border-b border-[#e5e5e5]">
               <th className="px-4 py-3 font-medium">Validator</th>
               <th className="px-4 py-3 font-medium cursor-pointer" onClick={() => handleSort('uptimePercent')}>
                 <span className="flex items-center gap-1">Uptime <SortIcon field="uptimePercent" /></span>
@@ -80,24 +80,24 @@ export default function ValidatorTable() {
           </thead>
           <tbody>
             {filtered.map((v) => (
-              <tr key={v.id} className="border-t border-border hover:bg-white/[0.02] transition-colors">
+              <tr key={v.id} className="border-t border-[#e5e5e5] hover:bg-[#F5F5F5] transition-colors">
                 <td className="px-4 py-3">
-                  <p className="text-sm">{v.name}</p>
-                  <p className="text-[10px] text-neutral-600 font-mono">{formatAddress(v.pubkey)}</p>
+                  <p className="text-sm text-black">{v.name}</p>
+                  <p className="text-[10px] text-gray-400 font-mono">{formatAddress(v.pubkey)}</p>
                 </td>
-                <td className="px-4 py-3 text-sm">{v.uptimePercent.toFixed(2)}%</td>
-                <td className="px-4 py-3 text-sm text-neutral-400">{v.commissionPercent}%</td>
+                <td className="px-4 py-3 text-sm text-black">{v.uptimePercent.toFixed(2)}%</td>
+                <td className="px-4 py-3 text-sm text-gray-500">{v.commissionPercent}%</td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
-                    <div className="w-12 h-1 bg-white/10 rounded-full overflow-hidden">
-                      <div className="h-full rounded-full bg-white" style={{ width: `${v.performanceScore}%` }} />
+                    <div className="w-12 h-1.5 bg-[#e5e5e5] rounded-full overflow-hidden">
+                      <div className="h-full rounded-full bg-black" style={{ width: `${v.performanceScore}%` }} />
                     </div>
-                    <span className="text-sm">{v.performanceScore.toFixed(1)}</span>
+                    <span className="text-sm text-black">{v.performanceScore.toFixed(1)}</span>
                   </div>
                 </td>
-                <td className="px-4 py-3 text-sm text-neutral-400">{formatXLM(v.allocatedStake)} XLM</td>
+                <td className="px-4 py-3 text-sm text-gray-500">{formatXLM(v.allocatedStake)} XLM</td>
                 <td className="px-4 py-3">
-                  <span className={`text-[10px] font-medium ${v.isActive ? 'text-green-500' : 'text-red-500'}`}>
+                  <span className={`text-[10px] font-medium ${v.isActive ? 'text-green-600' : 'text-red-500'}`}>
                     {v.isActive ? 'Active' : 'Inactive'}
                   </span>
                 </td>
