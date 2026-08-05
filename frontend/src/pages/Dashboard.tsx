@@ -9,7 +9,7 @@ function Footer() {
   return (
     <footer className="border-t border-[#e5e5e5] bg-[#F5F5F5] px-6 py-16">
       <div className="max-w-[88rem] mx-auto">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-12 mb-12">
           <div className="md:col-span-1">
             <Link to="/" className="flex items-center gap-2 mb-4" style={{ textDecoration: 'none' }}>
               <LogoIcon className="w-6 h-6 text-black" />
@@ -23,6 +23,7 @@ function Footer() {
             { heading: 'Protocol', links: [['Stake', '/stake'], ['Withdraw', '/withdraw'], ['Analytics', '/analytics']] },
             { heading: 'DeFi', links: [['Lending', '/lending'], ['Liquidity', '/liquidity'], ['Leverage', '/leverage'], ['Restaking', '/restaking']] },
             { heading: 'Governance', links: [['Governance', '/governance'], ['Validators', '/validators']] },
+            { heading: 'Company', links: [['Docs', '/docs'], ['Career', '/career']] },
           ].map((col) => (
             <div key={col.heading}>
               <p className="text-xs text-black/40 uppercase tracking-[0.12em] mb-4">{col.heading}</p>

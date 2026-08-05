@@ -647,7 +647,7 @@ export default function Docs() {
   const activeGroup = SIDEBAR_GROUPS.find(g => g.items.some(i => i.id === activeId));
 
   return (
-    <div className="flex h-[calc(100vh-60px)] bg-[#F5F5F5]">
+    <div className="flex h-screen bg-[#F5F5F5]">
 
       {/* ── Left sidebar ── */}
       <aside className="hidden md:flex flex-col w-56 xl:w-64 flex-shrink-0 border-r border-[#e5e5e5] bg-[#F5F5F5] overflow-y-auto">

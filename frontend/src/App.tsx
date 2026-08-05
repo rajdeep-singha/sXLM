@@ -9,15 +9,17 @@ import Governance from './pages/Governance';
 import Leverage from './pages/Leverage';
 import Restaking from './pages/Restaking';
 import Docs from './pages/Docs';
+import Career from './pages/Career';
 
 function App() {
   const location = useLocation();
   const isHome = location.pathname === '/';
+  const hideNav = ['/docs', '/career'].includes(location.pathname);
 
   return (
     <div className="flex flex-col bg-[#F5F5F5] min-h-screen">
-      <Navbar />
-      <main className={isHome ? '' : 'pt-[60px]'}>
+      {!hideNav && <Navbar />}
+      <main className={isHome || hideNav ? '' : 'pt-[60px]'}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/stake" element={<Stake />} />
@@ -28,6 +30,7 @@ function App() {
           <Route path="/leverage" element={<Leverage />} />
           <Route path="/restaking" element={<Restaking />} />
           <Route path="/docs" element={<Docs />} />
+          <Route path="/career" element={<Career />} />
         </Routes>
       </main>
     </div>
