@@ -22,13 +22,13 @@ interface Opening {
 
 const OPENINGS: Opening[] = [
   {
-    id: 'video-editor',
-    title: 'Video Editor',
+    id: 'creative-designer',
+    title: 'Creative Designer (Video, Motion & Graphics)',
     department: 'Content',
     location: 'Remote',
-    type: 'Full-time',
+    type: 'Intern',
     description:
-      'Edit crisp, engaging videos for StelloFi — explainers, product walkthroughs, and social content that make DeFi on Stellar easy to understand.',
+      'Craft compelling videos, motion graphics, and visual assets for StelloFi / explainers, product walkthroughs, and social content that make DeFi on Stellar easy to understand.',
   },
 ];
 

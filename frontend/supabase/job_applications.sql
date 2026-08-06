@@ -19,6 +19,11 @@ create table if not exists public.job_applications (
 -- Row Level Security: lock the table down, then open ONLY anonymous inserts.
 alter table public.job_applications enable row level security;
 
+-- Table-level privilege: the anon/authenticated roles need INSERT granted
+-- (RLS decides *which* rows; GRANT decides whether the role can touch the table
+--  at all). Without this you get: "permission denied for table job_applications".
+grant insert on public.job_applications to anon, authenticated;
+
 -- Allow the public (anon + authenticated) to submit applications...
 create policy "Public can submit applications"
   on public.job_applications
