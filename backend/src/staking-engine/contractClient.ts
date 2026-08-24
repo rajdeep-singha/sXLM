@@ -638,68 +638,7 @@ async function pollTransaction(
   );
 }
 
-/**
- * Sync the staking exchange rate to the lending contract.
- * The lending contract stores its own ExchangeRate (sXLM→XLM, scaled by 1e7).
- * Call this after every reward distribution or snapshot to keep health factors current.
- *
- * rate: exchange rate from computeExchangeRate() (e.g. 1.0042)
- * The lending contract expects RATE_PRECISION = 1e7 scaling, so 1.0042 → 10_042_000
- */
-export async function callUpdateLendingExchangeRate(rate: number): Promise<void> {
-  // rate is in XLM-per-sXLM float (e.g. 1.0042)
-  // Contract expects i128 scaled by RATE_PRECISION = 10_000_000
-  const scaledRate = BigInt(Math.round(rate * 10_000_000));
+// callUpdateLendingExchangeRate removed: lending reads get_exchange_rate from
+// the vault cross-contract, so the rate cannot drift between the two and no
+// off-chain service needs write access to a price.
 
-  if (scaledRate <= BigInt(0)) {
-    console.warn("[contractClient] callUpdateLendingExchangeRate: rate <= 0, skipping");
-    return;
-  }
-
-  const { keypair, account } = await getSourceAccount();
-  const contract = getLendingContract();
-
-  const op = contract.call(
-    "update_exchange_rate",
-    nativeToScVal(scaledRate, { type: "i128" })
-  );
-
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: getNetworkPassphrase(),
-  })
-    .addOperation(op)
-    .setTimeout(300)
-    .build();
-
-  const preparedTx = await server.prepareTransaction(tx);
-  preparedTx.sign(keypair);
-
-  const result = await server.sendTransaction(preparedTx);
-  if (result.status === "ERROR") {
-    throw new Error(`callUpdateLendingExchangeRate failed: ${JSON.stringify(result.errorResult)}`);
-  }
-
-  // update_exchange_rate returns void. server.getTransaction() tries to parse
-  // the XDR return value and throws "Bad union switch" on void returns.
-  // Use the raw RPC endpoint instead to poll just the status field.
-  const rpcUrl = config.stellar.rpcUrl;
-  let attempts = 0;
-  while (attempts < 30) {
-    const resp = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0", id: 1, method: "getTransaction",
-        params: { hash: result.hash },
-      }),
-    });
-    const json = (await resp.json()) as { result?: { status: string } };
-    const status = json.result?.status;
-    if (status === "SUCCESS") break;
-    if (status === "FAILED") throw new Error(`update_exchange_rate tx failed: ${result.hash}`);
-    await new Promise((r) => setTimeout(r, 2000));
-    attempts++;
-  }
-  console.log(`[contractClient] Lending exchange rate updated: ${rate.toFixed(7)} (${scaledRate})`);
-}

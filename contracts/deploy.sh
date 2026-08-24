@@ -169,9 +169,10 @@ stellar contract invoke \
   --native_token "$NATIVE_TOKEN_ID" \
   --collateral_factor_bps 7000 \
   --liquidation_threshold_bps 8000 \
-  --borrow_rate_bps 500
+  --borrow_rate_bps 500 \
+  --vault "$STAKING_CONTRACT_ID"
 
-echo "  Lending contract initialized"
+echo "  Lending contract initialized (reads sXLM rate from the vault)"
 
 # LP Pool: fee=30bps (0.3%)
 stellar contract invoke \
