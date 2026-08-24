@@ -457,21 +457,26 @@ export async function callWithdrawFees(amount: bigint): Promise<string> {
   ]);
 }
 
+/**
+ * Contribute realised yield to the vault.
+ *
+ * `add_rewards` now transfers the XLM in rather than incrementing a counter, so
+ * the admin account must actually hold `amount` at call time. A shortfall fails
+ * the transaction instead of raising the exchange rate against nothing.
+ */
 export async function callAddRewards(amount: bigint): Promise<string> {
   return executeAdminContractCall("add_rewards", [
+    new Address(config.admin.publicKey).toScVal(),
     nativeToScVal(amount, { type: "i128" }),
   ]);
 }
 
-export async function callRecalibrateRate(): Promise<string> {
-  return executeAdminContractCall("recalibrate_rate");
-}
-
-export async function callApplySlashing(slashAmount: bigint): Promise<string> {
-  return executeAdminContractCall("apply_slashing", [
-    nativeToScVal(slashAmount, { type: "i128" }),
-  ]);
-}
+// callRecalibrateRate removed: the exchange rate is derived on read, so there is
+// nothing to recalibrate.
+//
+// callApplySlashing removed: it decremented the stored asset counter, which no
+// longer exists. Strategy losses become visible through the strategy balance
+// itself once the Phase 2 registry lands, reported via report_strategy_loss.
 
 export async function callPause(): Promise<string> {
   return executeAdminContractCall("pause");

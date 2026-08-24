@@ -49,29 +49,8 @@ export const adminRoutes: FastifyPluginAsync<{ stakingEngine: StakingEngine }> =
     }
   });
 
-  /**
-   * POST /admin/slash
-   * Apply slashing on-chain — reduces TotalXlmStaked, lowering exchange rate.
-   */
-  fastify.post("/admin/slash", async (request, reply) => {
-    try {
-      const body = z.object({
-        amountXlm: z.number().positive(),
-        reason: z.string().optional(),
-      }).parse(request.body);
+  // POST /admin/slash removed with apply_slashing. Losses will be reported
+  // against a named strategy once the registry exists; until then there is no
+  // honest way for an admin to lower the exchange rate.
 
-      const slashStroops = BigInt(Math.floor(body.amountXlm * 1e7));
-      const txHash = await stakingEngine.applySlashing(slashStroops);
-
-      return {
-        success: true,
-        txHash,
-        slashedXlm: body.amountXlm,
-        reason: body.reason ?? "manual",
-      };
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Slash failed";
-      reply.status(500).send({ error: message });
-    }
-  });
 };

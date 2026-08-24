@@ -5,11 +5,19 @@ use soroban_sdk::{
 };
 
 /// Precision multiplier for exchange rate calculations (7 decimals).
+///
+/// 1e7 matches Stellar stroops. This is deliberate: the vault never holds a
+/// value more precise than a stroop, so a wider fixed-point scale would add
+/// digits that cannot correspond to anything the contract can actually pay out.
 const RATE_PRECISION: i128 = 10_000_000; // 1e7
 
 /// Protocol fee in basis points (1000 = 10%).
 const PROTOCOL_FEE_BPS: i128 = 1000;
 const BPS_DENOMINATOR: i128 = 10_000;
+
+/// Shares burned to the contract itself on the first deposit so that the share
+/// price can never be manipulated by donating to an empty vault.
+const MINIMUM_LIQUIDITY: i128 = 1000;
 
 // ---------- TTL constants ----------
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 100_800;   // ~7 days
@@ -23,9 +31,13 @@ pub enum DataKey {
     Admin,
     SxlmToken,
     NativeToken,
-    TotalXlmStaked,
-    TotalSxlmSupply,
-    LiquidityBuffer,
+    /// XLM handed out to strategies. Always 0 until the Phase 2 registry lands,
+    /// but the term exists now so `total_assets()` never has to be redefined.
+    DeployedToStrategies,
+    /// XLM owed to withdrawals whose shares are already burned but whose payout
+    /// has not happened yet. Subtracted from assets so the exchange rate does
+    /// not rise for remaining holders during the cooldown window.
+    PendingWithdrawals,
     CooldownPeriod,
     Validators,
     WithdrawalQueue,
@@ -34,6 +46,8 @@ pub enum DataKey {
     Paused,
     Treasury,
     TreasuryBalance,
+    /// One-shot marker for the v2 storage migration.
+    MigratedV2,
 }
 
 #[derive(Clone)]
@@ -134,6 +148,50 @@ fn set_withdrawal_queue(env: &Env, queue: &Map<u64, WithdrawalRequest>) {
     extend_queue(env);
 }
 
+// ==========================================================
+// Accounting
+//
+// There is deliberately no stored "total XLM" numerator. Every figure below is
+// derived from balances the contract can actually pay out. A stored numerator
+// is what allowed the exchange rate to drift away from real holdings; deriving
+// it removes the possibility rather than one instance of it.
+// ==========================================================
+
+/// XLM sitting in the contract right now, including amounts that are already
+/// spoken for (queued withdrawals, accrued protocol fees).
+fn idle_balance(env: &Env) -> i128 {
+    let native = read_native_token(env);
+    token::Client::new(env, &native).balance(&env.current_contract_address())
+}
+
+/// XLM backing sXLM shares: everything the contract holds or has deployed,
+/// less every claim on it that is not a share claim.
+fn total_assets(env: &Env) -> i128 {
+    let assets = idle_balance(env)
+        + read_i128(env, &DataKey::DeployedToStrategies)
+        - read_i128(env, &DataKey::PendingWithdrawals)
+        - read_i128(env, &DataKey::TreasuryBalance);
+    if assets < 0 {
+        0
+    } else {
+        assets
+    }
+}
+
+/// XLM free to pay out this instant, net of prior claims.
+fn unencumbered_balance(env: &Env) -> i128 {
+    idle_balance(env)
+        - read_i128(env, &DataKey::PendingWithdrawals)
+        - read_i128(env, &DataKey::TreasuryBalance)
+}
+
+/// Share supply, read from the token contract rather than mirrored locally.
+/// A local mirror is the same bug class as a stored asset numerator.
+fn total_shares(env: &Env) -> i128 {
+    let sxlm = read_sxlm_token(env);
+    SxlmTokenClient::new(env, &sxlm).total_supply()
+}
+
 #[contract]
 pub struct StakingContract;
 
@@ -157,9 +215,9 @@ impl StakingContract {
         env.storage().instance().set(&DataKey::CooldownPeriod, &cooldown_period);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::Treasury, &admin);
-        write_i128(&env, &DataKey::TotalXlmStaked, 0);
-        write_i128(&env, &DataKey::TotalSxlmSupply, 0);
-        write_i128(&env, &DataKey::LiquidityBuffer, 0);
+        env.storage().instance().set(&DataKey::MigratedV2, &true);
+        write_i128(&env, &DataKey::DeployedToStrategies, 0);
+        write_i128(&env, &DataKey::PendingWithdrawals, 0);
         write_i128(&env, &DataKey::TreasuryBalance, 0);
         extend_instance(&env);
     }
@@ -169,6 +227,43 @@ impl StakingContract {
         let admin = read_admin(&env);
         admin.require_auth();
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
+    /// One-shot storage migration for a contract deployed before derived
+    /// accounting.
+    ///
+    /// The old build burned shares for queued withdrawals without ever
+    /// recording the matching liability. Upgrading without this call would let
+    /// `total_assets()` count XLM that is already owed to the queue, so the
+    /// exchange rate would jump for whoever is still holding shares. This
+    /// reconstructs the liability from the queue itself.
+    ///
+    /// The legacy `TotalXlmStaked`, `TotalSxlmSupply` and `LiquidityBuffer`
+    /// entries are intentionally left orphaned; nothing reads them any more.
+    pub fn migrate_v2(env: Env) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+        if env.storage().instance().has(&DataKey::MigratedV2) {
+            panic!("already migrated");
+        }
+        extend_instance(&env);
+
+        let queue = get_withdrawal_queue(&env);
+        let mut pending: i128 = 0;
+        for (_, request) in queue.iter() {
+            if !request.claimed {
+                pending += request.xlm_amount;
+            }
+        }
+
+        write_i128(&env, &DataKey::PendingWithdrawals, pending);
+        write_i128(&env, &DataKey::DeployedToStrategies, 0);
+        env.storage().instance().set(&DataKey::MigratedV2, &true);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("migrated"),),
+            (pending, idle_balance(&env), total_shares(&env)),
+        );
     }
 
     /// Bump instance TTL — can be called by anyone to keep the contract alive.
@@ -189,28 +284,45 @@ impl StakingContract {
         }
         extend_instance(&env);
 
+        // Snapshot before the transfer: total_assets() reads the live balance,
+        // so taking it afterwards would price the deposit against itself.
+        let assets_before = total_assets(&env);
+        let supply_before = total_shares(&env);
+
         let native_token_addr = read_native_token(&env);
         let xlm_client = token::Client::new(&env, &native_token_addr);
         xlm_client.transfer(&user, &env.current_contract_address(), &xlm_amount);
 
-        let total_staked = read_i128(&env, &DataKey::TotalXlmStaked);
-        let total_supply = read_i128(&env, &DataKey::TotalSxlmSupply);
+        let sxlm_token = read_sxlm_token(&env);
+        let sxlm_client = SxlmTokenClient::new(&env, &sxlm_token);
 
-        let sxlm_to_mint = if total_supply == 0 || total_staked == 0 {
-            xlm_amount
-        } else {
-            xlm_amount * total_supply / total_staked
-        };
+        if supply_before == 0 {
+            // Bootstrap. MINIMUM_LIQUIDITY shares are minted to the contract and
+            // never redeemed, so the vault can never be emptied back to a state
+            // where the next depositor sets the price.
+            if xlm_amount <= MINIMUM_LIQUIDITY {
+                panic!("initial deposit below minimum liquidity");
+            }
+            sxlm_client.mint(&env.current_contract_address(), &MINIMUM_LIQUIDITY);
+            sxlm_client.mint(&user, &(xlm_amount - MINIMUM_LIQUIDITY));
 
+            env.events().publish(
+                (soroban_sdk::symbol_short!("deposit"),),
+                (user, xlm_amount, xlm_amount - MINIMUM_LIQUIDITY),
+            );
+            return;
+        }
+
+        if assets_before <= 0 {
+            // Shares exist but nothing backs them. Minting against this would
+            // price the deposit arbitrarily; refuse instead.
+            panic!("vault has no assets");
+        }
+
+        let sxlm_to_mint = xlm_amount * supply_before / assets_before;
         if sxlm_to_mint <= 0 {
             panic!("mint amount too small");
         }
-
-        write_i128(&env, &DataKey::TotalXlmStaked, total_staked + xlm_amount);
-        write_i128(&env, &DataKey::TotalSxlmSupply, total_supply + sxlm_to_mint);
-
-        let sxlm_token = read_sxlm_token(&env);
-        let sxlm_client = SxlmTokenClient::new(&env, &sxlm_token);
         sxlm_client.mint(&user, &sxlm_to_mint);
 
         env.events().publish(
@@ -228,14 +340,14 @@ impl StakingContract {
         }
         extend_instance(&env);
 
-        let total_staked = read_i128(&env, &DataKey::TotalXlmStaked);
-        let total_supply = read_i128(&env, &DataKey::TotalSxlmSupply);
+        let assets = total_assets(&env);
+        let supply = total_shares(&env);
 
-        if total_supply == 0 {
+        if supply == 0 {
             panic!("no sXLM in circulation");
         }
 
-        let xlm_to_return = sxlm_amount * total_staked / total_supply;
+        let xlm_to_return = sxlm_amount * assets / supply;
         if xlm_to_return <= 0 {
             panic!("return amount too small");
         }
@@ -244,14 +356,7 @@ impl StakingContract {
         let sxlm_client = SxlmTokenClient::new(&env, &sxlm_token);
         sxlm_client.burn(&user, &sxlm_amount);
 
-        write_i128(&env, &DataKey::TotalSxlmSupply, total_supply - sxlm_amount);
-
-        let buffer = read_i128(&env, &DataKey::LiquidityBuffer);
-
-        if buffer >= xlm_to_return {
-            write_i128(&env, &DataKey::LiquidityBuffer, buffer - xlm_to_return);
-            write_i128(&env, &DataKey::TotalXlmStaked, total_staked - xlm_to_return);
-
+        if unencumbered_balance(&env) >= xlm_to_return {
             let native_token_addr = read_native_token(&env);
             let xlm_client = token::Client::new(&env, &native_token_addr);
             xlm_client.transfer(&env.current_contract_address(), &user, &xlm_to_return);
@@ -261,6 +366,12 @@ impl StakingContract {
                 (user, xlm_to_return),
             );
         } else {
+            // Shares are gone but the XLM has not left yet. Record the debt in
+            // the same breath as burning the shares, or the exchange rate rises
+            // for everyone still holding until the claim lands.
+            let pending = read_i128(&env, &DataKey::PendingWithdrawals);
+            write_i128(&env, &DataKey::PendingWithdrawals, pending + xlm_to_return);
+
             let cooldown = read_cooldown(&env);
             let unlock_ledger = env.ledger().sequence() + cooldown;
             let id = next_withdrawal_id(&env);
@@ -306,8 +417,10 @@ impl StakingContract {
         queue.set(withdrawal_id, request.clone());
         set_withdrawal_queue(&env, &queue);
 
-        let total_staked = read_i128(&env, &DataKey::TotalXlmStaked);
-        write_i128(&env, &DataKey::TotalXlmStaked, total_staked - request.xlm_amount);
+        // Retire the liability as the XLM leaves, so the two move together.
+        let pending = read_i128(&env, &DataKey::PendingWithdrawals);
+        let remaining = pending - request.xlm_amount;
+        write_i128(&env, &DataKey::PendingWithdrawals, if remaining < 0 { 0 } else { remaining });
 
         let native_token_addr = read_native_token(&env);
         let xlm_client = token::Client::new(&env, &native_token_addr);
@@ -323,24 +436,28 @@ impl StakingContract {
     // Reward & Fee functions
     // ==========================================================
 
-    /// Add staking rewards — takes protocol fee (10%), remainder increases
-    /// total_xlm_staked, raising the exchange rate.
-    pub fn add_rewards(env: Env, amount: i128) {
-        let admin = read_admin(&env);
-        admin.require_auth();
+    /// Contribute realised yield to the vault.
+    ///
+    /// The XLM is transferred in. There is no counter to increment: the deposit
+    /// raises the contract balance, `total_assets()` reads that balance, and the
+    /// exchange rate follows. The protocol fee is booked as a liability so it is
+    /// excluded from the assets backing shares until it is withdrawn.
+    pub fn add_rewards(env: Env, from: Address, amount: i128) {
+        from.require_auth();
         if amount <= 0 {
             panic!("reward amount must be positive");
         }
         extend_instance(&env);
+
+        let native_token_addr = read_native_token(&env);
+        let xlm_client = token::Client::new(&env, &native_token_addr);
+        xlm_client.transfer(&from, &env.current_contract_address(), &amount);
 
         let fee = amount * PROTOCOL_FEE_BPS / BPS_DENOMINATOR;
         let net_reward = amount - fee;
 
         let treasury_bal = read_i128(&env, &DataKey::TreasuryBalance);
         write_i128(&env, &DataKey::TreasuryBalance, treasury_bal + fee);
-
-        let total_staked = read_i128(&env, &DataKey::TotalXlmStaked);
-        write_i128(&env, &DataKey::TotalXlmStaked, total_staked + net_reward);
 
         env.events().publish(
             (soroban_sdk::symbol_short!("rewards"),),
@@ -369,6 +486,11 @@ impl StakingContract {
         if withdraw_amount > treasury_bal {
             panic!("insufficient treasury balance");
         }
+        // Fees are only real if the XLM is actually here and not already owed to
+        // the withdrawal queue.
+        if withdraw_amount > idle_balance(&env) - read_i128(&env, &DataKey::PendingWithdrawals) {
+            panic!("insufficient unencumbered balance");
+        }
 
         let native_token_addr = read_native_token(&env);
         let xlm_client = token::Client::new(&env, &native_token_addr);
@@ -390,89 +512,16 @@ impl StakingContract {
     }
 
     // ==========================================================
-    // Slashing
+    // Liquidity
     // ==========================================================
 
-    pub fn apply_slashing(env: Env, slash_amount: i128) {
-        let admin = read_admin(&env);
-        admin.require_auth();
-        if slash_amount <= 0 {
-            panic!("slash amount must be positive");
-        }
-        extend_instance(&env);
-
-        let total_staked = read_i128(&env, &DataKey::TotalXlmStaked);
-        if slash_amount > total_staked {
-            panic!("slash amount exceeds total staked");
-        }
-
-        let new_total = total_staked - slash_amount;
-        write_i128(&env, &DataKey::TotalXlmStaked, new_total);
-
-        env.events().publish(
-            (soroban_sdk::symbol_short!("slashed"),),
-            (slash_amount, new_total),
-        );
-
-        let total_supply = read_i128(&env, &DataKey::TotalSxlmSupply);
-        let new_rate = if total_supply == 0 {
-            RATE_PRECISION
-        } else {
-            new_total * RATE_PRECISION / total_supply
-        };
-
-        env.events().publish(
-            (soroban_sdk::symbol_short!("recalib"),),
-            (new_rate, new_total, total_supply),
-        );
-    }
-
-    pub fn recalibrate_rate(env: Env) -> i128 {
-        extend_instance(&env);
-        let total_staked = read_i128(&env, &DataKey::TotalXlmStaked);
-        let total_supply = read_i128(&env, &DataKey::TotalSxlmSupply);
-
-        let new_rate = if total_supply == 0 {
-            RATE_PRECISION
-        } else {
-            total_staked * RATE_PRECISION / total_supply
-        };
-
-        env.events().publish(
-            (soroban_sdk::symbol_short!("recalib"),),
-            (new_rate, total_staked, total_supply),
-        );
-
-        new_rate
-    }
-
-    // ==========================================================
-    // Emergency pause
-    // ==========================================================
-
-    pub fn pause(env: Env) {
-        let admin = read_admin(&env);
-        admin.require_auth();
-        extend_instance(&env);
-        env.storage().instance().set(&DataKey::Paused, &true);
-        env.events().publish((soroban_sdk::symbol_short!("paused"),), true);
-    }
-
-    pub fn unpause(env: Env) {
-        let admin = read_admin(&env);
-        admin.require_auth();
-        extend_instance(&env);
-        env.storage().instance().set(&DataKey::Paused, &false);
-        env.events().publish((soroban_sdk::symbol_short!("paused"),), false);
-    }
-
-    // ==========================================================
-    // Liquidity & Validators
-    // ==========================================================
-
-    pub fn add_liquidity(env: Env, amount: i128) {
-        let admin = read_admin(&env);
-        admin.require_auth();
+    /// Donate XLM to the vault with no shares minted in return.
+    ///
+    /// Unlike the previous build this credits no separate buffer counter — the
+    /// donated XLM is simply part of the balance, so it backs shares like every
+    /// other asset instead of being invisible to the exchange rate.
+    pub fn add_liquidity(env: Env, from: Address, amount: i128) {
+        from.require_auth();
         if amount <= 0 {
             panic!("liquidity amount must be positive");
         }
@@ -480,10 +529,12 @@ impl StakingContract {
 
         let native_token_addr = read_native_token(&env);
         let xlm_client = token::Client::new(&env, &native_token_addr);
-        xlm_client.transfer(&admin, &env.current_contract_address(), &amount);
+        xlm_client.transfer(&from, &env.current_contract_address(), &amount);
 
-        let buffer = read_i128(&env, &DataKey::LiquidityBuffer);
-        write_i128(&env, &DataKey::LiquidityBuffer, buffer + amount);
+        env.events().publish(
+            (soroban_sdk::symbol_short!("liq_add"),),
+            (from, amount),
+        );
     }
 
     pub fn update_validators(env: Env, validators: Vec<Address>) {
@@ -509,33 +560,83 @@ impl StakingContract {
     }
 
     // ==========================================================
+    // Emergency pause
+    // ==========================================================
+
+    pub fn pause(env: Env) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+        extend_instance(&env);
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.events().publish((soroban_sdk::symbol_short!("paused"),), ());
+    }
+
+    pub fn unpause(env: Env) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+        extend_instance(&env);
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.events().publish((soroban_sdk::symbol_short!("unpaused"),), ());
+    }
+
+    // ==========================================================
     // View functions
     // ==========================================================
 
     pub fn get_exchange_rate(env: Env) -> i128 {
         extend_instance(&env);
-        let total_staked = read_i128(&env, &DataKey::TotalXlmStaked);
-        let total_supply = read_i128(&env, &DataKey::TotalSxlmSupply);
-        if total_supply == 0 {
+        let assets = total_assets(&env);
+        let supply = total_shares(&env);
+        if supply == 0 {
             RATE_PRECISION
         } else {
-            total_staked * RATE_PRECISION / total_supply
+            assets * RATE_PRECISION / supply
         }
     }
 
+    /// XLM backing sXLM shares.
+    pub fn total_assets(env: Env) -> i128 {
+        extend_instance(&env);
+        total_assets(&env)
+    }
+
+    /// Retained for client compatibility; identical to `total_assets`.
     pub fn total_xlm_staked(env: Env) -> i128 {
         extend_instance(&env);
-        read_i128(&env, &DataKey::TotalXlmStaked)
+        total_assets(&env)
     }
 
     pub fn total_sxlm_supply(env: Env) -> i128 {
         extend_instance(&env);
-        read_i128(&env, &DataKey::TotalSxlmSupply)
+        total_shares(&env)
     }
 
+    /// Raw XLM held by the contract, including encumbered amounts.
+    pub fn idle_balance(env: Env) -> i128 {
+        extend_instance(&env);
+        idle_balance(&env)
+    }
+
+    /// XLM free to pay out right now.
     pub fn liquidity_buffer(env: Env) -> i128 {
         extend_instance(&env);
-        read_i128(&env, &DataKey::LiquidityBuffer)
+        let free = unencumbered_balance(&env);
+        if free < 0 {
+            0
+        } else {
+            free
+        }
+    }
+
+    /// XLM owed to withdrawals whose shares are already burned.
+    pub fn pending_withdrawals(env: Env) -> i128 {
+        extend_instance(&env);
+        read_i128(&env, &DataKey::PendingWithdrawals)
+    }
+
+    pub fn deployed_to_strategies(env: Env) -> i128 {
+        extend_instance(&env);
+        read_i128(&env, &DataKey::DeployedToStrategies)
     }
 
     pub fn treasury_balance(env: Env) -> i128 {
@@ -592,103 +693,422 @@ pub trait SxlmTokenInterface {
 mod test {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::Env;
+    use soroban_sdk::{symbol_short, Env};
 
-    fn setup_staking(env: &Env) -> (StakingContractClient<'_>, Address, Address, Address) {
-        let contract_id = env.register_contract(None, StakingContract);
-        let client = StakingContractClient::new(env, &contract_id);
-        let admin = Address::generate(env);
-        let sxlm_token = Address::generate(env);
-        let native_token = Address::generate(env);
+    // ------------------------------------------------------------------
+    // Minimal sXLM stand-in. The real token lives in its own crate; this
+    // implements just the four entrypoints the vault calls, so share supply
+    // behaves like a real external token rather than a local counter.
+    // ------------------------------------------------------------------
 
-        client.initialize(&admin, &sxlm_token, &native_token, &17280u32);
-        (client, admin, sxlm_token, native_token)
+    #[contract]
+    pub struct MockSxlm;
+
+    #[contractimpl]
+    impl MockSxlm {
+        pub fn mint(env: Env, to: Address, amount: i128) {
+            let mut balances: Map<Address, i128> = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("BAL"))
+                .unwrap_or(Map::new(&env));
+            let current = balances.get(to.clone()).unwrap_or(0);
+            balances.set(to, current + amount);
+            env.storage().instance().set(&symbol_short!("BAL"), &balances);
+
+            let supply: i128 = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("SUP"))
+                .unwrap_or(0);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("SUP"), &(supply + amount));
+        }
+
+        pub fn burn(env: Env, from: Address, amount: i128) {
+            let mut balances: Map<Address, i128> = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("BAL"))
+                .unwrap_or(Map::new(&env));
+            let current = balances.get(from.clone()).unwrap_or(0);
+            if current < amount {
+                panic!("insufficient sxlm balance");
+            }
+            balances.set(from, current - amount);
+            env.storage().instance().set(&symbol_short!("BAL"), &balances);
+
+            let supply: i128 = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("SUP"))
+                .unwrap_or(0);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("SUP"), &(supply - amount));
+        }
+
+        pub fn balance(env: Env, id: Address) -> i128 {
+            let balances: Map<Address, i128> = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("BAL"))
+                .unwrap_or(Map::new(&env));
+            balances.get(id).unwrap_or(0)
+        }
+
+        pub fn total_supply(env: Env) -> i128 {
+            env.storage()
+                .instance()
+                .get(&symbol_short!("SUP"))
+                .unwrap_or(0)
+        }
     }
 
-    #[test]
-    fn test_exchange_rate_initial() {
-        let env = Env::default();
-        let (client, _, _, _) = setup_staking(&env);
-        assert_eq!(client.get_exchange_rate(), RATE_PRECISION);
-        assert_eq!(client.total_xlm_staked(), 0);
-        assert_eq!(client.total_sxlm_supply(), 0);
+    struct Fixture<'a> {
+        env: Env,
+        vault: StakingContractClient<'a>,
+        vault_id: Address,
+        sxlm: MockSxlmClient<'a>,
+        xlm: token::Client<'a>,
+        xlm_admin: token::StellarAssetClient<'a>,
+        admin: Address,
     }
 
-    #[test]
-    fn test_view_functions() {
-        let env = Env::default();
+    fn setup(env: &Env) -> Fixture<'_> {
         env.mock_all_auths();
-        let (client, admin, _, _) = setup_staking(&env);
-        assert_eq!(client.liquidity_buffer(), 0);
-        assert_eq!(client.admin(), admin);
-        assert_eq!(client.get_validators().len(), 0);
-        assert_eq!(client.is_paused(), false);
-        assert_eq!(client.treasury_balance(), 0);
-        assert_eq!(client.protocol_fee_bps(), PROTOCOL_FEE_BPS);
+
+        let admin = Address::generate(env);
+        let native_id = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let sxlm_id = env.register_contract(None, MockSxlm);
+        let vault_id = env.register_contract(None, StakingContract);
+
+        let vault = StakingContractClient::new(env, &vault_id);
+        vault.initialize(&admin, &sxlm_id, &native_id, &17280u32);
+
+        Fixture {
+            env: env.clone(),
+            vault,
+            vault_id,
+            sxlm: MockSxlmClient::new(env, &sxlm_id),
+            xlm: token::Client::new(env, &native_id),
+            xlm_admin: token::StellarAssetClient::new(env, &native_id),
+            admin,
+        }
     }
+
+    fn funded_user(f: &Fixture, amount: i128) -> Address {
+        let user = Address::generate(&f.env);
+        f.xlm_admin.mint(&user, &amount);
+        user
+    }
+
+    // ------------------------------------------------------------------
+    // Baseline
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn empty_vault_reports_unit_rate() {
+        let env = Env::default();
+        let f = setup(&env);
+        assert_eq!(f.vault.get_exchange_rate(), RATE_PRECISION);
+        assert_eq!(f.vault.total_assets(), 0);
+        assert_eq!(f.vault.total_sxlm_supply(), 0);
+        assert_eq!(f.vault.pending_withdrawals(), 0);
+    }
+
+    #[test]
+    fn deposit_then_withdraw_round_trips() {
+        let env = Env::default();
+        let f = setup(&env);
+        let user = funded_user(&f, 100_0000000);
+
+        f.vault.deposit(&user, &100_0000000);
+        let shares = f.sxlm.balance(&user);
+        assert_eq!(shares, 100_0000000 - MINIMUM_LIQUIDITY);
+
+        f.vault.request_withdrawal(&user, &shares);
+        // Paid instantly: the vault holds only the dead shares' backing.
+        assert_eq!(f.sxlm.balance(&user), 0);
+        assert!(f.xlm.balance(&user) >= 99_9999000);
+    }
+
+    // ------------------------------------------------------------------
+    // Dead shares
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn first_deposit_locks_minimum_liquidity() {
+        let env = Env::default();
+        let f = setup(&env);
+        let user = funded_user(&f, 10_0000000);
+
+        f.vault.deposit(&user, &10_0000000);
+
+        assert_eq!(f.sxlm.balance(&f.vault_id), MINIMUM_LIQUIDITY);
+        assert_eq!(f.sxlm.balance(&user), 10_0000000 - MINIMUM_LIQUIDITY);
+        assert_eq!(f.vault.total_sxlm_supply(), 10_0000000);
+    }
+
+    #[test]
+    #[should_panic(expected = "initial deposit below minimum liquidity")]
+    fn dust_first_deposit_is_refused() {
+        let env = Env::default();
+        let f = setup(&env);
+        let attacker = funded_user(&f, 10_0000000);
+        f.vault.deposit(&attacker, &1);
+    }
+
+    #[test]
+    fn donation_after_dust_deposit_cannot_squeeze_out_later_depositors() {
+        let env = Env::default();
+        let f = setup(&env);
+
+        // Smallest deposit the vault will now accept.
+        let attacker = funded_user(&f, 1_000_0000000);
+        f.vault.deposit(&attacker, &(MINIMUM_LIQUIDITY + 1));
+
+        // Classic inflation attack: donate a large amount to move share price.
+        f.vault.add_liquidity(&attacker, &100_0000000);
+
+        // A later depositor must still receive shares rather than rounding to nothing.
+        let victim = funded_user(&f, 100_0000000);
+        f.vault.deposit(&victim, &100_0000000);
+        assert!(f.sxlm.balance(&victim) > 0);
+    }
+
+    // ------------------------------------------------------------------
+    // The bug that is live on mainnet
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn a_withdrawal_leaves_the_rate_untouched() {
+        let env = Env::default();
+        let f = setup(&env);
+
+        let alice = funded_user(&f, 100_0000000);
+        let bob = funded_user(&f, 100_0000000);
+        f.vault.deposit(&alice, &100_0000000);
+        f.vault.deposit(&bob, &100_0000000);
+
+        let rate_before = f.vault.get_exchange_rate();
+        let alice_shares = f.sxlm.balance(&alice);
+        f.vault.request_withdrawal(&alice, &(alice_shares / 2));
+        let rate_after = f.vault.get_exchange_rate();
+
+        assert!(
+            (rate_after - rate_before).abs() <= 2,
+            "exchange rate moved on a withdrawal"
+        );
+    }
+
+    #[test]
+    fn everything_is_liquid_while_nothing_is_deployed() {
+        let env = Env::default();
+        let f = setup(&env);
+        let alice = funded_user(&f, 100_0000000);
+        f.vault.deposit(&alice, &100_0000000);
+
+        // With no strategy allocations the free balance equals the share
+        // backing, so no withdrawal can be forced into the queue.
+        assert_eq!(f.vault.deployed_to_strategies(), 0);
+        assert_eq!(f.vault.total_assets(), f.vault.liquidity_buffer());
+
+        f.vault.request_withdrawal(&alice, &f.sxlm.balance(&alice));
+        assert_eq!(f.vault.pending_withdrawals(), 0);
+    }
+
+    /// The mainnet bug, reproduced at the accounting layer.
+    ///
+    /// The old build burned shares for a queued withdrawal and left the XLM
+    /// counted as backing, so the rate rose for everyone still holding. Here
+    /// the liability is subtracted, so it does not.
+    #[test]
+    fn pending_withdrawals_are_excluded_from_share_backing() {
+        let env = Env::default();
+        let f = setup(&env);
+
+        let alice = funded_user(&f, 100_0000000);
+        f.vault.deposit(&alice, &100_0000000);
+
+        let assets_before = f.vault.total_assets();
+        let rate_before = f.vault.get_exchange_rate();
+
+        // Stand in for a queued exit: XLM spoken for, shares already gone.
+        let owed: i128 = 10_0000000;
+        env.as_contract(&f.vault_id, || {
+            write_i128(&env, &DataKey::PendingWithdrawals, owed);
+        });
+
+        assert_eq!(f.vault.total_assets(), assets_before - owed);
+        assert!(
+            f.vault.get_exchange_rate() < rate_before,
+            "unpaid exits must not appreciate the remaining shares"
+        );
+        assert_eq!(f.vault.pending_withdrawals(), owed);
+    }
+
+    #[test]
+    fn migrate_v2_reconstructs_the_liability_from_the_queue() {
+        let env = Env::default();
+        let f = setup(&env);
+
+        let alice = funded_user(&f, 100_0000000);
+        f.vault.deposit(&alice, &100_0000000);
+
+        // Recreate what the live contract looks like before the upgrade: a
+        // queue carrying burned-share obligations, no liability recorded.
+        env.as_contract(&f.vault_id, || {
+            let mut queue: Map<u64, WithdrawalRequest> = Map::new(&env);
+            queue.set(0, WithdrawalRequest {
+                id: 0, user: alice.clone(), xlm_amount: 9_848_024,
+                unlock_ledger: 1, claimed: false,
+            });
+            queue.set(1, WithdrawalRequest {
+                id: 1, user: alice.clone(), xlm_amount: 9_997_655,
+                unlock_ledger: 1, claimed: false,
+            });
+            queue.set(2, WithdrawalRequest {
+                id: 2, user: alice.clone(), xlm_amount: 18_269_206,
+                unlock_ledger: 1, claimed: false,
+            });
+            // Already settled: must not be counted.
+            queue.set(3, WithdrawalRequest {
+                id: 3, user: alice.clone(), xlm_amount: 10_000_000,
+                unlock_ledger: 1, claimed: true,
+            });
+            set_withdrawal_queue(&env, &queue);
+            env.storage().instance().remove(&DataKey::MigratedV2);
+            write_i128(&env, &DataKey::PendingWithdrawals, 0);
+        });
+
+        let assets_before = f.vault.total_assets();
+        f.vault.migrate_v2();
+
+        // The three live mainnet obligations, to the stroop.
+        assert_eq!(f.vault.pending_withdrawals(), 38_114_885);
+        assert_eq!(f.vault.total_assets(), assets_before - 38_114_885);
+    }
+
+    // ------------------------------------------------------------------
+    // Rewards must be funded
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn add_rewards_moves_real_xlm_and_lifts_the_rate() {
+        let env = Env::default();
+        let f = setup(&env);
+
+        let user = funded_user(&f, 100_0000000);
+        f.vault.deposit(&user, &100_0000000);
+        let rate_before = f.vault.get_exchange_rate();
+
+        let benefactor = funded_user(&f, 50_0000000);
+        let vault_before = f.xlm.balance(&f.vault_id);
+        f.vault.add_rewards(&benefactor, &50_0000000);
+
+        // The XLM actually arrived.
+        assert_eq!(f.xlm.balance(&f.vault_id) - vault_before, 50_0000000);
+        // 10% is booked as fee and does not back shares.
+        assert_eq!(f.vault.treasury_balance(), 5_0000000);
+        assert!(f.vault.get_exchange_rate() > rate_before);
+    }
+
+    #[test]
+    #[should_panic]
+    fn add_rewards_without_the_xlm_fails() {
+        let env = Env::default();
+        let f = setup(&env);
+        let user = funded_user(&f, 100_0000000);
+        f.vault.deposit(&user, &100_0000000);
+
+        // Benefactor holds nothing; the transfer must fail rather than
+        // conjuring a higher exchange rate.
+        let broke = Address::generate(&env);
+        f.vault.add_rewards(&broke, &50_0000000);
+    }
+
+    #[test]
+    fn total_assets_ignores_unbacked_claims() {
+        let env = Env::default();
+        let f = setup(&env);
+
+        let user = funded_user(&f, 100_0000000);
+        f.vault.deposit(&user, &100_0000000);
+
+        let benefactor = funded_user(&f, 100_0000000);
+        f.vault.add_rewards(&benefactor, &100_0000000);
+
+        // Treasury is inside the contract balance but is not share backing.
+        assert_eq!(
+            f.vault.total_assets(),
+            f.vault.idle_balance() - f.vault.treasury_balance()
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Fees
+    // ------------------------------------------------------------------
+
+    #[test]
+    #[should_panic(expected = "insufficient treasury balance")]
+    fn fees_cannot_exceed_what_was_earned() {
+        let env = Env::default();
+        let f = setup(&env);
+        let user = funded_user(&f, 100_0000000);
+        f.vault.deposit(&user, &100_0000000);
+        f.vault.withdraw_fees(&10_0000000);
+    }
+
+    #[test]
+    fn fee_withdrawal_leaves_share_backing_untouched() {
+        let env = Env::default();
+        let f = setup(&env);
+
+        let user = funded_user(&f, 100_0000000);
+        f.vault.deposit(&user, &100_0000000);
+
+        let benefactor = funded_user(&f, 100_0000000);
+        f.vault.add_rewards(&benefactor, &100_0000000);
+
+        let assets_before = f.vault.total_assets();
+        f.vault.withdraw_fees(&0);
+        assert_eq!(f.vault.treasury_balance(), 0);
+        assert_eq!(f.vault.total_assets(), assets_before);
+    }
+
+    // ------------------------------------------------------------------
+    // Housekeeping
+    // ------------------------------------------------------------------
 
     #[test]
     #[should_panic(expected = "already initialized")]
-    fn test_double_initialize_panics() {
+    fn double_initialize_panics() {
         let env = Env::default();
-        let (client, admin, sxlm, native) = setup_staking(&env);
-        client.initialize(&admin, &sxlm, &native, &100u32);
+        let f = setup(&env);
+        let other = Address::generate(&env);
+        f.vault.initialize(&f.admin, &other, &other, &100u32);
     }
 
     #[test]
-    fn test_add_rewards_with_fee() {
+    #[should_panic(expected = "already migrated")]
+    fn fresh_deploy_needs_no_migration() {
         let env = Env::default();
-        env.mock_all_auths();
-        let (client, _, _, _) = setup_staking(&env);
-        let gross_reward: i128 = 1000_0000000;
-        client.add_rewards(&gross_reward);
-        assert_eq!(client.total_xlm_staked(), 900_0000000);
-        assert_eq!(client.treasury_balance(), 100_0000000);
+        let f = setup(&env);
+        f.vault.migrate_v2();
     }
 
     #[test]
-    fn test_withdraw_fees_partial() {
+    fn pause_blocks_deposits() {
         let env = Env::default();
-        env.mock_all_auths();
-
-        let admin = Address::generate(&env);
-        let sxlm_id = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
-        let native_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
-
-        let contract_id = env.register_contract(None, StakingContract);
-        let client = StakingContractClient::new(&env, &contract_id);
-        client.initialize(&admin, &sxlm_id, &native_id, &17280u32);
-
-        // Fund contract with XLM so withdraw_fees can transfer out
-        let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &native_id);
-        sac_client.mint(&contract_id, &10_000_0000000);
-
-        // add_rewards builds treasury (10% of 1000 = 100 treasury)
-        client.add_rewards(&1000_0000000);
-        assert_eq!(client.treasury_balance(), 100_0000000);
-
-        let token_client = soroban_sdk::token::Client::new(&env, &native_id);
-        let admin_balance_before = token_client.balance(&admin);
-
-        // Withdraw partial (50 XLM)
-        client.withdraw_fees(&50_0000000);
-        assert_eq!(client.treasury_balance(), 50_0000000);
-        assert_eq!(token_client.balance(&admin) - admin_balance_before, 50_0000000);
-
-        // Withdraw remaining (pass 0 = withdraw all)
-        client.withdraw_fees(&0);
-        assert_eq!(client.treasury_balance(), 0);
-    }
-
-    #[test]
-    fn test_pause_and_unpause() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (client, _, _, _) = setup_staking(&env);
-        assert_eq!(client.is_paused(), false);
-        client.pause();
-        assert_eq!(client.is_paused(), true);
-        client.unpause();
-        assert_eq!(client.is_paused(), false);
+        let f = setup(&env);
+        assert_eq!(f.vault.is_paused(), false);
+        f.vault.pause();
+        assert_eq!(f.vault.is_paused(), true);
+        f.vault.unpause();
+        assert_eq!(f.vault.is_paused(), false);
     }
 }

@@ -16,10 +16,8 @@ import {
   getTreasuryBalance,
   getIsPaused,
   getProtocolFeeBps,
-  callApplySlashing,
   callPause,
   callUnpause,
-  callRecalibrateRate,
 } from "./contractClient.js";
 import { getEventBus, EventType } from "../event-bus/index.js";
 
@@ -140,28 +138,6 @@ export class StakingEngine {
 
   // --- Admin operations ---
 
-  async applySlashing(slashAmountStroops: bigint): Promise<string> {
-    // apply_slashing already emits recalib event on-chain
-    const result = await callApplySlashing(slashAmountStroops);
-
-    // Explicit ER recalibration call to ensure event is emitted
-    try {
-      await callRecalibrateRate();
-      console.log("[StakingEngine] Exchange rate recalibrated on-chain after slashing");
-    } catch (err) {
-      console.error("[StakingEngine] Recalibration call failed (ER still auto-adjusts):", err);
-    }
-
-    // Emit slashing event so withdrawal queue gets recalculated
-    const eventBus = getEventBus();
-    await eventBus.publish(EventType.SLASHING_APPLIED, {
-      amount: slashAmountStroops,
-      reason: "admin",
-      timestamp: Date.now(),
-    });
-
-    return result;
-  }
 
   async pause(): Promise<string> {
     return callPause();

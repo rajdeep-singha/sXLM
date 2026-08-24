@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { getEventBus, EventType } from "../event-bus/index.js";
 import { config } from "../config/index.js";
-import { callApplySlashing, callPause, callUnpause } from "../staking-engine/contractClient.js";
+import { callPause, callUnpause } from "../staking-engine/contractClient.js";
 
 let monitorInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -310,9 +310,11 @@ export class RiskEngine {
 
         if (slashAmount > BigInt(0)) {
           try {
-            await callApplySlashing(slashAmount);
+            // No on-chain action. Stellar has no validator slashing, and the
+            // vault no longer has a counter an admin can decrement. This path
+            // alerts only until losses can be reported against a strategy.
             console.warn(
-              `[RiskEngine] Applied slashing: ${Number(slashAmount) / 1e7} XLM for validator ${pubkey}`
+              `[RiskEngine] Would have flagged ${Number(slashAmount) / 1e7} XLM for validator ${pubkey} — alert only, no on-chain effect`
             );
 
             // Emit slashing event for withdrawal queue recalculation
