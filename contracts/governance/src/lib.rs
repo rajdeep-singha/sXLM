@@ -22,10 +22,12 @@ pub enum DataKey {
     ProposalCount,
     Proposal(u64),
     Vote(u64, Address), // (proposal_id, voter) → bool
+    /// sXLM escrowed by a voter for a proposal, returned after voting closes.
+    VoteWeight(u64, Address),
     // Governable parameter storage (result of executed proposals)
     Param(String),
-    // Total sXLM supply reference for quorum calculation (set by admin)
-    ReferenceSupply,
+    /// Ledgers that must pass between voting closing and execution.
+    ExecutionDelayLedgers,
 }
 
 #[derive(Clone)]
@@ -39,6 +41,14 @@ pub struct Proposal {
     pub votes_against: i128,
     pub start_ledger: u32,
     pub end_ledger: u32,
+    /// Earliest ledger at which this proposal may execute. Voting closing and
+    /// execution are deliberately separated so a passing proposal can be seen
+    /// and reacted to before it takes effect.
+    pub eta: u32,
+    /// Share supply at creation. Quorum is measured against this rather than a
+    /// figure an admin can set, and freezing it stops a proposal's own
+    /// mint/burn activity from moving the bar it has to clear.
+    pub supply_snapshot: i128,
     pub executed: bool,
 }
 
@@ -81,6 +91,20 @@ fn read_voting_period(env: &Env) -> u32 {
         .instance()
         .get(&DataKey::VotingPeriodLedgers)
         .unwrap_or(17280u32) // ~24 hours
+}
+
+fn read_execution_delay(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ExecutionDelayLedgers)
+        .unwrap_or(17280u32) // ~24 hours
+}
+
+fn read_vote_weight(env: &Env, proposal_id: u64, voter: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::VoteWeight(proposal_id, voter.clone()))
+        .unwrap_or(0)
 }
 
 fn read_quorum_bps(env: &Env) -> i128 {
@@ -151,6 +175,7 @@ impl GovernanceContract {
         sxlm_token: Address,
         voting_period_ledgers: u32,
         quorum_bps: u32,
+        execution_delay_ledgers: u32,
     ) {
         let already: bool = env.storage().instance().get(&DataKey::Initialized).unwrap_or(false);
         if already {
@@ -161,8 +186,10 @@ impl GovernanceContract {
         env.storage().instance().set(&DataKey::SxlmToken, &sxlm_token);
         env.storage().instance().set(&DataKey::VotingPeriodLedgers, &voting_period_ledgers);
         env.storage().instance().set(&DataKey::QuorumBps, &(quorum_bps as i128));
-        // Default reference supply: 0 means quorum check uses absolute minimum
-        env.storage().instance().set(&DataKey::ReferenceSupply, &0i128);
+        assert!(quorum_bps > 0, "quorum must be greater than zero");
+        env.storage()
+            .instance()
+            .set(&DataKey::ExecutionDelayLedgers, &execution_delay_ledgers);
         extend_instance(&env);
     }
 
@@ -176,15 +203,6 @@ impl GovernanceContract {
     /// Bump instance TTL — can be called by anyone to keep contract alive.
     pub fn bump_instance(env: Env) {
         extend_instance(&env);
-    }
-
-    /// Set the reference total supply for quorum calculation. Only callable by admin.
-    pub fn set_reference_supply(env: Env, supply: i128) {
-        let admin = read_admin(&env);
-        admin.require_auth();
-        assert!(supply >= 0, "supply must be non-negative");
-        extend_instance(&env);
-        env.storage().instance().set(&DataKey::ReferenceSupply, &supply);
     }
 
     /// Create a new governance proposal. Proposer must hold minimum sXLM balance.
@@ -208,6 +226,9 @@ impl GovernanceContract {
         let id = next_proposal_id(&env);
         let current_ledger = env.ledger().sequence();
         let voting_period = read_voting_period(&env);
+        let end_ledger = current_ledger + voting_period;
+        let supply_snapshot = SxlmSupplyClient::new(&env, &sxlm).total_supply();
+        assert!(supply_snapshot > 0, "no shares in circulation");
 
         let proposal = Proposal {
             id,
@@ -217,7 +238,9 @@ impl GovernanceContract {
             votes_for: 0,
             votes_against: 0,
             start_ledger: current_ledger,
-            end_ledger: current_ledger + voting_period,
+            end_ledger,
+            eta: end_ledger + read_execution_delay(&env),
+            supply_snapshot,
             executed: false,
         };
 
@@ -231,36 +254,52 @@ impl GovernanceContract {
         id
     }
 
-    /// Vote on a proposal. Vote weight = sXLM balance at time of vote.
-    pub fn vote(env: Env, voter: Address, proposal_id: u64, support: bool) {
+    /// Vote on a proposal by escrowing sXLM for the length of the vote.
+    ///
+    /// The previous build weighted votes by a live `balance()` call, so the
+    /// same tokens could be bought, voted with, and sold inside one ledger —
+    /// and could vote on every proposal at once. Escrow makes the voter hold
+    /// the position for the voting period instead of borrowing it for an
+    /// instant. Tokens are returned by `unlock_vote` once voting closes.
+    pub fn vote(env: Env, voter: Address, proposal_id: u64, support: bool, amount: i128) {
         voter.require_auth();
         extend_instance(&env);
         extend_vote(&env, proposal_id, &voter);
 
         let mut proposal = read_proposal(&env, proposal_id);
 
-        // Check voting period
+        assert!(!proposal.executed, "proposal already executed");
         let current_ledger = env.ledger().sequence();
         assert!(
             current_ledger <= proposal.end_ledger,
             "voting period has ended"
         );
+        assert!(!has_voted(&env, proposal_id, &voter), "already voted");
+        assert!(amount > 0, "vote weight must be positive");
 
-        // Check not already voted
-        assert!(
-            !has_voted(&env, proposal_id, &voter),
-            "already voted"
+        // Escrow the shares. This is also the balance check: a voter without
+        // the tokens cannot complete the transfer.
+        let sxlm = read_sxlm_token(&env);
+        token::Client::new(&env, &sxlm).transfer(
+            &voter,
+            &env.current_contract_address(),
+            &amount,
         );
 
-        // Get voter's sXLM balance as vote weight
-        let sxlm = read_sxlm_token(&env);
-        let weight = token::Client::new(&env, &sxlm).balance(&voter);
-        assert!(weight > 0, "no sXLM to vote with");
+        env.storage().persistent().set(
+            &DataKey::VoteWeight(proposal_id, voter.clone()),
+            &amount,
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::VoteWeight(proposal_id, voter.clone()),
+            PROPOSAL_LIFETIME_THRESHOLD,
+            PROPOSAL_BUMP_AMOUNT,
+        );
 
         if support {
-            proposal.votes_for += weight;
+            proposal.votes_for += amount;
         } else {
-            proposal.votes_against += weight;
+            proposal.votes_against += amount;
         }
 
         set_voted(&env, proposal_id, &voter);
@@ -268,7 +307,38 @@ impl GovernanceContract {
 
         env.events().publish(
             (soroban_sdk::symbol_short!("voted"),),
-            (proposal_id, voter, support, weight),
+            (proposal_id, voter, support, amount),
+        );
+    }
+
+    /// Reclaim escrowed sXLM once voting on a proposal has closed.
+    pub fn unlock_vote(env: Env, voter: Address, proposal_id: u64) {
+        voter.require_auth();
+        extend_instance(&env);
+
+        let proposal = read_proposal(&env, proposal_id);
+        assert!(
+            env.ledger().sequence() > proposal.end_ledger,
+            "voting period has not ended"
+        );
+
+        let weight = read_vote_weight(&env, proposal_id, &voter);
+        assert!(weight > 0, "nothing to unlock");
+
+        env.storage()
+            .persistent()
+            .remove(&DataKey::VoteWeight(proposal_id, voter.clone()));
+
+        let sxlm = read_sxlm_token(&env);
+        token::Client::new(&env, &sxlm).transfer(
+            &env.current_contract_address(),
+            &voter,
+            &weight,
+        );
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("unlocked"),),
+            (proposal_id, voter, weight),
         );
     }
 
@@ -287,20 +357,19 @@ impl GovernanceContract {
             current_ledger > proposal.end_ledger,
             "voting period not ended"
         );
+        // Timelock. A proposal that has passed is visible for the delay before
+        // it can take effect, which is the whole point of having one.
+        assert!(current_ledger >= proposal.eta, "timelock has not elapsed");
 
-        // Check quorum: total_votes must be >= reference_supply * quorum_bps / BPS_DENOMINATOR
+        // Quorum against the supply snapshot taken at creation. This check is
+        // unconditional: the previous build skipped it entirely whenever the
+        // admin-set reference supply was zero, which was its initial value.
         let total_votes = proposal.votes_for + proposal.votes_against;
         assert!(total_votes > 0, "no votes cast");
 
         let quorum_bps = read_quorum_bps(&env);
-        let reference_supply: i128 = env.storage().instance()
-            .get(&DataKey::ReferenceSupply)
-            .unwrap_or(0);
-
-        if reference_supply > 0 {
-            let min_votes_required = reference_supply * quorum_bps / BPS_DENOMINATOR;
-            assert!(total_votes >= min_votes_required, "quorum not met");
-        }
+        let min_votes_required = proposal.supply_snapshot * quorum_bps / BPS_DENOMINATOR;
+        assert!(total_votes >= min_votes_required, "quorum not met");
 
         // Must pass: votes_for > votes_against
         assert!(
@@ -348,7 +417,31 @@ impl GovernanceContract {
         (proposal.votes_for, proposal.votes_against)
     }
 
+    /// sXLM a voter has escrowed on a proposal.
+    pub fn get_vote_weight(env: Env, proposal_id: u64, voter: Address) -> i128 {
+        extend_instance(&env);
+        read_vote_weight(&env, proposal_id, &voter)
+    }
+
+    /// Ledgers between voting closing and execution becoming possible.
+    pub fn execution_delay(env: Env) -> u32 {
+        extend_instance(&env);
+        read_execution_delay(&env)
+    }
+
+    /// Earliest ledger at which a proposal may execute.
+    pub fn proposal_eta(env: Env, id: u64) -> u32 {
+        extend_instance(&env);
+        read_proposal(&env, id).eta
+    }
+
     /// Read an approved governance parameter value.
+    ///
+    /// Note: no other contract reads these values yet. Executing a proposal
+    /// records the approved value here; applying it to the vault or the lending
+    /// market still requires those contracts to accept governance as their
+    /// admin, which is a mainnet ownership transfer and is deliberately not
+    /// bundled into this change.
     pub fn get_param(env: Env, key: String) -> String {
         extend_instance(&env);
         let param_key = DataKey::Param(key);
@@ -366,191 +459,257 @@ impl GovernanceContract {
     }
 }
 
+use soroban_sdk::contractclient;
+
+/// The SEP-41 token interface has no total supply, so quorum reads it from the
+/// sXLM contract's own entrypoint.
+#[contractclient(name = "SxlmSupplyClient")]
+pub trait SxlmSupplyInterface {
+    fn total_supply(env: Env) -> i128;
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use soroban_sdk::testutils::{Address as _, Ledger};
-    use soroban_sdk::{token::StellarAssetClient, Env, String};
+    use soroban_sdk::{symbol_short, Env, Map, String};
 
-    fn setup_test() -> (Env, Address, Address, Address, Address) {
-        let env = Env::default();
+    /// sXLM stand-in: transferable like the real token and, unlike a Stellar
+    /// asset contract, able to report total supply for the quorum check.
+    #[contract]
+    pub struct MockSxlm;
+
+    #[contractimpl]
+    impl MockSxlm {
+        pub fn mint(env: Env, to: Address, amount: i128) {
+            let mut b: Map<Address, i128> = env.storage().instance()
+                .get(&symbol_short!("BAL")).unwrap_or(Map::new(&env));
+            b.set(to.clone(), b.get(to).unwrap_or(0) + amount);
+            env.storage().instance().set(&symbol_short!("BAL"), &b);
+            let sup: i128 = env.storage().instance()
+                .get(&symbol_short!("SUP")).unwrap_or(0);
+            env.storage().instance().set(&symbol_short!("SUP"), &(sup + amount));
+        }
+
+        pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+            from.require_auth();
+            let mut b: Map<Address, i128> = env.storage().instance()
+                .get(&symbol_short!("BAL")).unwrap_or(Map::new(&env));
+            let f = b.get(from.clone()).unwrap_or(0);
+            if f < amount {
+                panic!("insufficient balance");
+            }
+            b.set(from, f - amount);
+            b.set(to.clone(), b.get(to).unwrap_or(0) + amount);
+            env.storage().instance().set(&symbol_short!("BAL"), &b);
+        }
+
+        pub fn balance(env: Env, id: Address) -> i128 {
+            let b: Map<Address, i128> = env.storage().instance()
+                .get(&symbol_short!("BAL")).unwrap_or(Map::new(&env));
+            b.get(id).unwrap_or(0)
+        }
+
+        pub fn total_supply(env: Env) -> i128 {
+            env.storage().instance().get(&symbol_short!("SUP")).unwrap_or(0)
+        }
+    }
+
+    struct Fixture<'a> {
+        env: Env,
+        gov: GovernanceContractClient<'a>,
+        sxlm: MockSxlmClient<'a>,
+        proposer: Address,
+        voter: Address,
+    }
+
+    /// 100 ledgers of voting, 10% quorum, 50 ledgers of timelock.
+    fn setup(env: &Env) -> Fixture<'_> {
         env.mock_all_auths();
 
-        let admin = Address::generate(&env);
-        let proposer = Address::generate(&env);
-        let voter = Address::generate(&env);
+        let admin = Address::generate(env);
+        let proposer = Address::generate(env);
+        let voter = Address::generate(env);
 
-        let sxlm_id = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
-        let contract_id = env.register_contract(None, GovernanceContract);
+        let sxlm_id = env.register_contract(None, MockSxlm);
+        let gov_id = env.register_contract(None, GovernanceContract);
 
-        let client = GovernanceContractClient::new(&env, &contract_id);
-        client.initialize(&admin, &sxlm_id, &100, &1000); // 100 ledgers voting, 10% quorum
+        let gov = GovernanceContractClient::new(env, &gov_id);
+        gov.initialize(&admin, &sxlm_id, &100, &1000, &50);
 
-        // Mint sXLM to participants
-        let sxlm_admin = StellarAssetClient::new(&env, &sxlm_id);
-        sxlm_admin.mint(&proposer, &10_000_0000000);
-        sxlm_admin.mint(&voter, &5_000_0000000);
+        let sxlm = MockSxlmClient::new(env, &sxlm_id);
+        sxlm.mint(&proposer, &10_000_0000000);
+        sxlm.mint(&voter, &5_000_0000000);
 
-        (env, contract_id, sxlm_id, proposer, voter)
+        Fixture { env: env.clone(), gov, sxlm, proposer, voter }
+    }
+
+    fn advance(env: &Env, ledgers: u32) {
+        env.ledger().with_mut(|l| l.sequence_number += ledgers);
+    }
+
+    fn propose(f: &Fixture) -> u64 {
+        f.gov.create_proposal(
+            &f.proposer,
+            &String::from_str(&f.env, "collateral_factor"),
+            &String::from_str(&f.env, "7500"),
+        )
     }
 
     #[test]
-    fn test_initialize() {
-        let (env, contract_id, _, _, _) = setup_test();
-        let client = GovernanceContractClient::new(&env, &contract_id);
-        assert_eq!(client.proposal_count(), 0);
+    fn initializes_with_a_timelock() {
+        let env = Env::default();
+        let f = setup(&env);
+        assert_eq!(f.gov.proposal_count(), 0);
+        assert_eq!(f.gov.execution_delay(), 50);
     }
 
     #[test]
-    fn test_create_proposal() {
-        let (env, contract_id, _, proposer, _) = setup_test();
-        let client = GovernanceContractClient::new(&env, &contract_id);
+    fn proposal_records_eta_and_supply_snapshot() {
+        let env = Env::default();
+        let f = setup(&env);
+        let id = propose(&f);
 
-        let id = client.create_proposal(
-            &proposer,
-            &String::from_str(&env, "protocol_fee_bps"),
-            &String::from_str(&env, "500"),
-        );
-        assert_eq!(id, 0);
-        assert_eq!(client.proposal_count(), 1);
-
-        let p = client.get_proposal(&0);
-        assert_eq!(p.votes_for, 0);
-        assert_eq!(p.votes_against, 0);
-        assert!(!p.executed);
+        let p = f.gov.get_proposal(&id);
+        assert_eq!(p.eta, p.end_ledger + 50);
+        // Both participants' holdings, frozen at creation.
+        assert_eq!(p.supply_snapshot, 15_000_0000000);
     }
 
     #[test]
-    fn test_vote() {
-        let (env, contract_id, _, proposer, voter) = setup_test();
-        let client = GovernanceContractClient::new(&env, &contract_id);
+    fn voting_escrows_the_shares() {
+        let env = Env::default();
+        let f = setup(&env);
+        let id = propose(&f);
 
-        client.create_proposal(
-            &proposer,
-            &String::from_str(&env, "protocol_fee_bps"),
-            &String::from_str(&env, "500"),
-        );
+        let before = f.sxlm.balance(&f.voter);
+        f.gov.vote(&f.voter, &id, &true, &5_000_0000000);
 
-        client.vote(&voter, &0, &true);
+        assert_eq!(f.sxlm.balance(&f.voter), before - 5_000_0000000);
+        assert_eq!(f.gov.get_vote_weight(&id, &f.voter), 5_000_0000000);
+        assert_eq!(f.gov.get_vote_count(&id), (5_000_0000000, 0));
+    }
 
-        let (votes_for, votes_against) = client.get_vote_count(&0);
-        assert_eq!(votes_for, 5_000_0000000); // voter's balance
-        assert_eq!(votes_against, 0);
+    /// The attack the old build allowed: weight came from a live balance read,
+    /// so shares could be voted and then moved on in the same ledger. Escrow
+    /// means the second voter simply does not have them.
+    #[test]
+    #[should_panic(expected = "insufficient balance")]
+    fn the_same_shares_cannot_vote_twice() {
+        let env = Env::default();
+        let f = setup(&env);
+        let id = propose(&f);
+
+        f.gov.vote(&f.voter, &id, &true, &5_000_0000000);
+
+        // Voter tries to pass their (now escrowed) shares to an accomplice.
+        let accomplice = Address::generate(&env);
+        f.sxlm.transfer(&f.voter, &accomplice, &5_000_0000000);
+        f.gov.vote(&accomplice, &id, &true, &5_000_0000000);
     }
 
     #[test]
     #[should_panic(expected = "already voted")]
-    fn test_double_vote() {
-        let (env, contract_id, _, proposer, voter) = setup_test();
-        let client = GovernanceContractClient::new(&env, &contract_id);
-
-        client.create_proposal(
-            &proposer,
-            &String::from_str(&env, "protocol_fee_bps"),
-            &String::from_str(&env, "500"),
-        );
-
-        client.vote(&voter, &0, &true);
-        client.vote(&voter, &0, &false); // should panic
+    fn a_voter_cannot_vote_twice() {
+        let env = Env::default();
+        let f = setup(&env);
+        let id = propose(&f);
+        f.gov.vote(&f.voter, &id, &true, &1_000_0000000);
+        f.gov.vote(&f.voter, &id, &true, &1_000_0000000);
     }
 
     #[test]
-    fn test_execute_proposal_stores_param() {
-        let (env, contract_id, _, proposer, voter) = setup_test();
-        let client = GovernanceContractClient::new(&env, &contract_id);
+    fn escrow_is_returned_after_voting_closes() {
+        let env = Env::default();
+        let f = setup(&env);
+        let id = propose(&f);
 
-        client.create_proposal(
-            &proposer,
-            &String::from_str(&env, "collateral_factor"),
-            &String::from_str(&env, "7500"),
-        );
+        let before = f.sxlm.balance(&f.voter);
+        f.gov.vote(&f.voter, &id, &true, &5_000_0000000);
+        advance(&env, 101);
+        f.gov.unlock_vote(&f.voter, &id);
 
-        // Both vote for
-        client.vote(&proposer, &0, &true);
-        client.vote(&voter, &0, &true);
-
-        // Advance ledger past voting period
-        env.ledger().with_mut(|li| {
-            li.sequence_number += 101;
-        });
-
-        client.execute_proposal(&0);
-
-        let p = client.get_proposal(&0);
-        assert!(p.executed);
-
-        // Verify the parameter was stored
-        let value = client.get_param(&String::from_str(&env, "collateral_factor"));
-        assert_eq!(value, String::from_str(&env, "7500"));
+        assert_eq!(f.sxlm.balance(&f.voter), before);
+        assert_eq!(f.gov.get_vote_weight(&id, &f.voter), 0);
     }
 
     #[test]
-    #[should_panic(expected = "voting period not ended")]
-    fn test_execute_too_early() {
-        let (env, contract_id, _, proposer, voter) = setup_test();
-        let client = GovernanceContractClient::new(&env, &contract_id);
+    #[should_panic(expected = "voting period has not ended")]
+    fn escrow_is_locked_until_voting_closes() {
+        let env = Env::default();
+        let f = setup(&env);
+        let id = propose(&f);
+        f.gov.vote(&f.voter, &id, &true, &5_000_0000000);
+        f.gov.unlock_vote(&f.voter, &id);
+    }
 
-        client.create_proposal(
-            &proposer,
-            &String::from_str(&env, "fee"),
-            &String::from_str(&env, "100"),
+    #[test]
+    #[should_panic(expected = "timelock has not elapsed")]
+    fn execution_waits_for_the_timelock() {
+        let env = Env::default();
+        let f = setup(&env);
+        let id = propose(&f);
+        f.gov.vote(&f.proposer, &id, &true, &10_000_0000000);
+
+        // Voting is over, but the delay has not passed.
+        advance(&env, 101);
+        f.gov.execute_proposal(&id);
+    }
+
+    #[test]
+    fn execution_succeeds_once_the_timelock_elapses() {
+        let env = Env::default();
+        let f = setup(&env);
+        let id = propose(&f);
+        f.gov.vote(&f.proposer, &id, &true, &10_000_0000000);
+
+        advance(&env, 151);
+        f.gov.execute_proposal(&id);
+
+        assert_eq!(
+            f.gov.get_param(&String::from_str(&env, "collateral_factor")),
+            String::from_str(&env, "7500")
         );
+        assert!(f.gov.get_proposal(&id).executed);
+    }
 
-        client.vote(&proposer, &0, &true);
-        client.vote(&voter, &0, &true);
+    /// Quorum used to be skipped whenever the admin-set reference supply was
+    /// zero, which is what it was initialised to. It is now unconditional.
+    #[test]
+    #[should_panic(expected = "quorum not met")]
+    fn quorum_is_enforced() {
+        let env = Env::default();
+        let f = setup(&env);
+        let id = propose(&f);
 
-        // Don't advance ledger
-        client.execute_proposal(&0);
+        // 10% of a 15,000 sXLM supply is 1,500. This is well under.
+        f.gov.vote(&f.voter, &id, &true, &100_0000000);
+
+        advance(&env, 151);
+        f.gov.execute_proposal(&id);
     }
 
     #[test]
     #[should_panic(expected = "proposal did not pass")]
-    fn test_execute_failed_proposal() {
-        let (env, contract_id, _, proposer, voter) = setup_test();
-        let client = GovernanceContractClient::new(&env, &contract_id);
+    fn a_defeated_proposal_cannot_execute() {
+        let env = Env::default();
+        let f = setup(&env);
+        let id = propose(&f);
 
-        client.create_proposal(
-            &proposer,
-            &String::from_str(&env, "fee"),
-            &String::from_str(&env, "100"),
-        );
+        f.gov.vote(&f.proposer, &id, &false, &10_000_0000000);
+        f.gov.vote(&f.voter, &id, &true, &5_000_0000000);
 
-        // Vote against with more weight
-        client.vote(&proposer, &0, &false); // 10k against
-        client.vote(&voter, &0, &true); // 5k for
-
-        env.ledger().with_mut(|li| {
-            li.sequence_number += 101;
-        });
-
-        client.execute_proposal(&0); // should panic
+        advance(&env, 151);
+        f.gov.execute_proposal(&id);
     }
 
     #[test]
-    fn test_vote_against() {
-        let (env, contract_id, _, proposer, voter) = setup_test();
-        let client = GovernanceContractClient::new(&env, &contract_id);
-
-        client.create_proposal(
-            &proposer,
-            &String::from_str(&env, "fee"),
-            &String::from_str(&env, "100"),
+    fn unset_params_read_empty() {
+        let env = Env::default();
+        let f = setup(&env);
+        assert_eq!(
+            f.gov.get_param(&String::from_str(&env, "nothing")),
+            String::from_str(&env, "")
         );
-
-        client.vote(&voter, &0, &false);
-
-        let (votes_for, votes_against) = client.get_vote_count(&0);
-        assert_eq!(votes_for, 0);
-        assert_eq!(votes_against, 5_000_0000000);
-    }
-
-    #[test]
-    fn test_get_param_default() {
-        let (env, contract_id, _, _, _) = setup_test();
-        let client = GovernanceContractClient::new(&env, &contract_id);
-
-        // Non-existent param returns empty string
-        let val = client.get_param(&String::from_str(&env, "nonexistent"));
-        assert_eq!(val, String::from_str(&env, ""));
     }
 }

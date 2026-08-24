@@ -28,6 +28,7 @@ export default function Governance() {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [paramKey, setParamKey] = useState('protocol_fee_bps');
   const [newValue, setNewValue] = useState('');
+  const [voteAmounts, setVoteAmounts] = useState<Record<number, string>>({});
 
   const handleCreateProposal = async () => {
     if (!newValue) return;
@@ -40,8 +41,10 @@ export default function Governance() {
   };
 
   const handleVote = async (proposalId: number, support: boolean) => {
+    const amount = Number(voteAmounts[proposalId]);
+    if (!amount || amount <= 0) return;
     clearError();
-    await vote(proposalId, support);
+    await vote(proposalId, support, amount);
   };
 
   const handleExecute = async (proposalId: number) => {
@@ -230,7 +233,29 @@ export default function Governance() {
                 </div>
 
                 {proposal.status === 'active' && isConnected && (
-                  <div className="flex gap-3">
+                  <div className="flex flex-col gap-3">
+                    <div>
+                      <label className="block text-xs text-black/50 mb-1.5">
+                        sXLM to lock — returned when voting closes
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        inputMode="decimal"
+                        value={voteAmounts[proposal.id] ?? ''}
+                        onChange={(e) =>
+                          setVoteAmounts((prev) => ({ ...prev, [proposal.id]: e.target.value }))
+                        }
+                        placeholder="0.0"
+                        className="w-full px-3 py-2 rounded-xl border border-[#e5e5e5] bg-white text-sm text-black tabular-nums focus:outline-none focus:border-black/30"
+                      />
+                      <p className="mt-1.5 text-xs text-black/40">
+                        Your vote weighs what you lock. It stays escrowed until the vote ends,
+                        so the same sXLM cannot vote twice.
+                      </p>
+                    </div>
+                    <div className="flex gap-3">
                     <button
                       onClick={() => handleVote(proposal.id, true)}
                       disabled={isSubmitting}
@@ -245,6 +270,7 @@ export default function Governance() {
                     >
                       {isSubmitting ? '…' : 'Vote Against'}
                     </button>
+                    </div>
                   </div>
                 )}
 
