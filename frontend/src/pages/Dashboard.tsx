@@ -21,8 +21,8 @@ function Footer() {
           </div>
           {[
             { heading: 'Protocol', links: [['Stake', '/stake'], ['Withdraw', '/withdraw'], ['Analytics', '/analytics']] },
-            { heading: 'DeFi', links: [['Lending', '/lending'], ['Liquidity', '/liquidity'], ['Leverage', '/leverage'], ['Restaking', '/restaking']] },
-            { heading: 'Governance', links: [['Governance', '/governance'], ['Validators', '/validators']] },
+            { heading: 'DeFi', links: [['Lending', '/lending'], ['Liquidity', '/liquidity'], ['Analytics', '/analytics']] },
+            { heading: 'Governance', links: [['Governance', '/governance'], ['Docs', '/docs']] },
             { heading: 'Company', links: [['Docs', '/docs'], ['Career', '/career']] },
           ].map((col) => (
             <div key={col.heading}>

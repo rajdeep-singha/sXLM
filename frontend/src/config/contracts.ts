@@ -20,7 +20,9 @@ export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:30
 export const PROTOCOL_CONFIG = {
   minStakeAmount: 1,
   maxStakeAmount: 1_000_000,
-  unbondingPeriodDays: 21,
+  // Cooldown before a queued withdrawal can be claimed. Set on-chain in
+  // ledgers; read get_cooldown_period() for the authoritative value.
+  cooldownHours: 24,
   instantWithdrawFeePercent: 0.5,
   decimals: 7,
   xlmDecimals: 7,

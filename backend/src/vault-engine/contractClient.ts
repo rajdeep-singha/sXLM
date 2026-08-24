@@ -335,6 +335,53 @@ export async function getLiquidityBuffer(): Promise<bigint> {
   throw new Error("getLiquidityBuffer: no result from simulation");
 }
 
+export async function getPendingWithdrawals(): Promise<bigint> {
+  const contract = getStakingContract();
+  const { account } = await getSourceAccount();
+
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: getNetworkPassphrase(),
+  })
+    .addOperation(contract.call("pending_withdrawals"))
+    .setTimeout(30)
+    .build();
+
+  const simResult = await server.simulateTransaction(tx);
+
+  if (rpc.Api.isSimulationError(simResult)) {
+    throw new Error(`getPendingWithdrawals simulation failed: ${simResult.error}`);
+  }
+  if (rpc.Api.isSimulationSuccess(simResult) && simResult.result) {
+    return BigInt(scValToNative(simResult.result.retval));
+  }
+  throw new Error("getPendingWithdrawals: no result from simulation");
+}
+
+export async function getIdleBalance(): Promise<bigint> {
+  const contract = getStakingContract();
+  const { account } = await getSourceAccount();
+
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: getNetworkPassphrase(),
+  })
+    .addOperation(contract.call("idle_balance"))
+    .setTimeout(30)
+    .build();
+
+  const simResult = await server.simulateTransaction(tx);
+
+  if (rpc.Api.isSimulationError(simResult)) {
+    throw new Error(`getIdleBalance simulation failed: ${simResult.error}`);
+  }
+  if (rpc.Api.isSimulationSuccess(simResult) && simResult.result) {
+    return BigInt(scValToNative(simResult.result.retval));
+  }
+  throw new Error("getIdleBalance: no result from simulation");
+}
+
+
 export async function getTreasuryBalance(): Promise<bigint> {
   const contract = getStakingContract();
   const { keypair, account } = await getSourceAccount();

@@ -4,7 +4,6 @@ import { config } from "../config/index.js";
 export enum EventType {
   STAKE_EXECUTED = "stake:executed",
   UNSTAKE_EXECUTED = "unstake:executed",
-  VALIDATOR_DOWN = "validator:down",
   REWARD_UPDATED = "reward:updated",
   WITHDRAWAL_READY = "withdrawal:ready",
   REBALANCE_REQUIRED = "rebalance:required",
@@ -17,12 +16,6 @@ export interface StakeExecutedPayload {
   sxlmMinted: bigint;
   txHash: string;
   timestamp: number;
-}
-
-export interface ValidatorDownPayload {
-  pubkey: string;
-  uptime: number;
-  lastChecked: string;
 }
 
 export interface RewardUpdatedPayload {
@@ -63,7 +56,6 @@ export interface SlashingAppliedPayload {
 type EventPayloadMap = {
   [EventType.STAKE_EXECUTED]: StakeExecutedPayload;
   [EventType.UNSTAKE_EXECUTED]: UnstakeExecutedPayload;
-  [EventType.VALIDATOR_DOWN]: ValidatorDownPayload;
   [EventType.REWARD_UPDATED]: RewardUpdatedPayload;
   [EventType.WITHDRAWAL_READY]: WithdrawalReadyPayload;
   [EventType.REBALANCE_REQUIRED]: RebalanceRequiredPayload;

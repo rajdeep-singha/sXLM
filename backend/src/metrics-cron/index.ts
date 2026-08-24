@@ -91,27 +91,16 @@ export class MetricsCron {
     const totalStakedXlm = Number(totalStaked) / 1e7;
     const tvlUsd = totalStakedXlm * (this.lastXlmPrice || 0);
 
-    // Get average validator score
-    const validators = await this.prisma.validator.findMany({
-      select: { performanceScore: true },
-    });
-    const avgValidatorScore =
-      validators.length > 0
-        ? validators.reduce((sum, v) => sum + v.performanceScore, 0) /
-          validators.length
-        : 0;
-
     await this.prisma.protocolMetrics.create({
       data: {
         totalStaked,
         totalSupply,
         tvlUsd,
-        avgValidatorScore,
       },
     });
 
     console.log(
-      `[MetricsCron] Snapshot: staked=${totalStakedXlm.toFixed(2)} XLM, TVL=$${tvlUsd.toFixed(2)}, avgScore=${avgValidatorScore.toFixed(3)}`
+      `[MetricsCron] Snapshot: staked=${totalStakedXlm.toFixed(2)} XLM, TVL=$${tvlUsd.toFixed(2)}`
     );
   }
 

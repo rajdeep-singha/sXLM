@@ -7,36 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Validator {
-  id               Int       @id @default(autoincrement())
-  pubkey           String    @unique
-  uptime           Float
-  commission       Float
-  votingPower      Float?
-  performanceScore Float
-  allocatedStake   BigInt
-  lastChecked      DateTime
-
-  history ValidatorHistory[]
-
-  @@map("validators")
-}
-
-model ValidatorHistory {
-  id               Int      @id @default(autoincrement())
-  validatorId      Int
-  uptime           Float
-  commission       Float
-  performanceScore Float
-  allocatedStake   BigInt
-  timestamp        DateTime @default(now())
-
-  validator Validator @relation(fields: [validatorId], references: [id])
-
-  @@index([validatorId, timestamp])
-  @@map("validator_history")
-}
-
 model RewardSnapshot {
   id           Int      @id @default(autoincrement())
   timestamp    DateTime @default(now())
@@ -66,7 +36,6 @@ model ProtocolMetrics {
   totalStaked       BigInt
   totalSupply       BigInt
   tvlUsd            Float
-  avgValidatorScore Float
   protocolFees      BigInt   @default(0)
   updatedAt         DateTime @default(now())
 

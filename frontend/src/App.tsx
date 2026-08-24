@@ -1,4 +1,4 @@
-import { Routes, Route, useLocation } from 'react-router-dom';
+import { Routes, Route, useLocation, Link } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import Dashboard from './pages/Dashboard';
 import Stake from './pages/Stake';
@@ -6,8 +6,7 @@ import Withdraw from './pages/Withdraw';
 import Lending from './pages/Lending';
 import Liquidity from './pages/Liquidity';
 import Governance from './pages/Governance';
-import Leverage from './pages/Leverage';
-import Restaking from './pages/Restaking';
+import Analytics from './pages/Analytics';
 import Docs from './pages/Docs';
 import Career from './pages/Career';
 
@@ -27,10 +26,10 @@ function App() {
           <Route path="/lending" element={<Lending />} />
           <Route path="/liquidity" element={<Liquidity />} />
           <Route path="/governance" element={<Governance />} />
-          <Route path="/leverage" element={<Leverage />} />
-          <Route path="/restaking" element={<Restaking />} />
+          <Route path="/analytics" element={<Analytics />} />
           <Route path="/docs" element={<Docs />} />
           <Route path="/career" element={<Career />} />
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
     </div>
@@ -38,3 +37,20 @@ function App() {
 }
 
 export default App;
+
+function NotFound() {
+  return (
+    <div className="min-h-[60vh] flex flex-col items-center justify-center gap-4 px-6 text-center">
+      <p className="text-sm text-black/40 uppercase tracking-wider">404</p>
+      <h1 className="text-3xl font-medium text-black" style={{ letterSpacing: '-0.03em' }}>
+        This page doesn't exist
+      </h1>
+      <p className="text-black/60 max-w-md">
+        It may have moved, or it may be something StelloFi no longer does.
+      </p>
+      <Link to="/" className="text-black underline underline-offset-4">
+        Back to the dashboard
+      </Link>
+    </div>
+  );
+}

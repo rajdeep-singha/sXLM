@@ -14,8 +14,6 @@ import { apyRoutes } from "./routes/apy.js";
 import { withdrawalRoutes } from "./routes/withdrawals.js";
 import { authRoutes } from "./routes/auth.js";
 import { adminRoutes } from "./routes/admin.js";
-import { leverageRoutes } from "./routes/leverage.js";
-import { restakingRoutes } from "./routes/restaking.js";
 import { lendingRoutes } from "./routes/lending.js";
 import { liquidityRoutes } from "./routes/liquidity.js";
 import { governanceRoutes } from "./routes/governance.js";
@@ -91,12 +89,6 @@ export async function startApiGateway(deps: GatewayDeps) {
     prefix: "/api",
   });
 
-  // Milestone 5: Leverage, Restaking, Lending, Liquidity, Governance
-  await fastify.register(leverageRoutes, { prefix: "/api" });
-  await fastify.register(restakingRoutes, {
-    prisma: deps.prisma,
-    prefix: "/api",
-  });
   await fastify.register(lendingRoutes, {
     prisma: deps.prisma,
     prefix: "/api",
