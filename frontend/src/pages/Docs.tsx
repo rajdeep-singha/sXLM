@@ -202,7 +202,7 @@ function DocContent() {
             </thead>
             <tbody>
               {[
-                { name: 'sxlm-token', addr: 'CAS3...OWMA', desc: 'Vault share token — share accounting, minting, burning' },
+                { name: 'sxlm-token', addr: 'CCGF...O7FJ', desc: 'Vault share token — share accounting, minting, burning' },
                 { name: 'vault', addr: 'CDYX...45PS', desc: 'Primary entry point — receives XLM, routes to strategies' },
                 { name: 'lending', addr: 'CAOW...QNJG', desc: 'Overcollateralized borrowing and lending engine' },
                 { name: 'lp-pool', addr: 'CAW2...VLHV', desc: 'AMM for XLM/sXLM liquidity' },
@@ -285,18 +285,22 @@ function DocContent() {
           Oracles are used only for external asset pricing, collateral valuation, and liquidation logic.
         </P>
 
-        <H3 id="wad-ray">Fixed-Point Arithmetic (Wad/Ray)</H3>
+        <H3 id="precision">Fixed-Point Arithmetic</H3>
         <P>
-          The Soroban WebAssembly runtime lacks native floating-point arithmetic. To prevent truncation errors compounding across millions of transactions,
-          StelloFi implements fixed-point arithmetic using Wad and Ray scaling mechanics:
+          The Soroban WebAssembly runtime has no floating-point arithmetic, so every rate is an integer.
+          StelloFi scales by <Code>1e7</Code> and computes in Soroban's native <Code>i128</Code>.
         </P>
         <Formula>
-          {'Wad = 10^18  (standard precision)'}
+          {'RATE_PRECISION = 10_000_000  (1e7)'}
           <br />
-          {'Ray = 10^27  (high-precision temporal indexing)'}
-          <br />
-          {'All calculations use Soroban native i128 (128-bit integer) to prevent overflow.'}
+          {'All arithmetic in i128.'}
         </Formula>
+        <P>
+          1e7 is chosen because it is exactly the precision of a stroop, the smallest unit of XLM.
+          A wider scale — 1e18, 1e27 — would carry digits that cannot correspond to any amount the vault
+          is able to hold or pay out, which reads as precision the protocol does not actually have.
+          Division floors, and it floors against the depositor rather than the pool.
+        </P>
       </section>
 
       <div className="border-t border-[#e5e5e5] my-12" />
@@ -516,13 +520,17 @@ function DocContent() {
       {/* ── AUDIT PLAN ── */}
       <section id="audit-plan" className="scroll-mt-20">
         <H2 id="audit-h">Audit Plan</H2>
-        <P>Before mainnet deployment, StelloFi completes:</P>
+        <P>
+          The contracts are deployed on Stellar mainnet and their source is <strong className="text-black font-medium">not yet verified</strong> on
+          public explorers. Treat the protocol as unaudited. The following are outstanding:
+        </P>
         <ul className="space-y-2 my-4 text-sm text-black/70">
           {[
             'Internal unit and integration testing',
             'Property-based testing for share accounting',
             'Invariant testing for deposits, withdrawals, and exchange-rate updates',
             'External audit of Soroban contracts',
+            'Source verification on stellar.expert',
             'Oracle manipulation review',
             'Keeper permission review',
             'Economic stress testing',
@@ -562,8 +570,8 @@ function DocContent() {
         <P>All contracts deployed on Stellar Mainnet:</P>
         <div className="space-y-3 my-4">
           {[
-            { name: 'sXLM Token', id: 'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA' },
-            { name: 'Vault (Staking)', id: 'CDYXKWVDGEVA6OSIGN7GRAPPRN6AKID35OJL5ZZQIBCMECZ35KGL45PS' },
+            { name: 'sXLM Token', id: 'CCGFHMW3NZD5Z7ATHYHZSEG6ABCJADUHP5HIAWFPR37CP4VGNEDQO7FJ' },
+            { name: 'Vault', id: 'CDYXKWVDGEVA6OSIGN7GRAPPRN6AKID35OJL5ZZQIBCMECZ35KGL45PS' },
             { name: 'Lending', id: 'CAOWXZ6BWA2ZYY7GHD75OFKADKUJS4WCKPDYGGXULQWFJRB55TXAQNJG' },
             { name: 'LP Pool', id: 'CAW2DRMOI3CCJWKVMEUWYJUEQHXB4S4DR72HNL2DWQCMQQUH3LFFVLHV' },
             { name: 'Governance', id: 'CB7LV3FBQ7US26GVC7SM7RMX22IEEHAEUL7V3TDDWM32DHA5TDFDDEP4' },
@@ -586,7 +594,7 @@ function DocContent() {
           {[
             { path: 'frontend/', desc: 'React + Vite + TypeScript client app', detail: 'npm run dev (port 5173)' },
             { path: 'backend/', desc: 'Node.js + Fastify API + Prisma + Redis', detail: 'npm run dev (port 3001)' },
-            { path: 'contract/', desc: 'Rust Soroban smart contracts (Cargo)', detail: 'cargo build --target wasm32-unknown-unknown' },
+            { path: 'contracts/', desc: 'Rust Soroban smart contracts (Cargo)', detail: 'cargo build --target wasm32-unknown-unknown' },
           ].map((p) => (
             <div key={p.path} className="card p-4">
               <p className="font-mono text-sm text-black mb-1">{p.path}</p>
@@ -599,7 +607,7 @@ function DocContent() {
         <H3 id="env-vars">Environment Variables</H3>
         <P>Frontend environment variables (prefix: <Code>VITE_</Code>):</P>
         <Formula>
-          {'VITE_SXLM_TOKEN_CONTRACT_ID=CAS3...\nVITE_STAKING_CONTRACT_ID=CDYX...\nVITE_LENDING_CONTRACT_ID=CAOW...\nVITE_LP_POOL_CONTRACT_ID=CAW2...\nVITE_GOVERNANCE_CONTRACT_ID=CB7L...\nVITE_STELLAR_NETWORK=mainnet'}
+          {'VITE_SXLM_TOKEN_CONTRACT_ID=CCGF...\nVITE_STAKING_CONTRACT_ID=CDYX...\nVITE_LENDING_CONTRACT_ID=CAOW...\nVITE_LP_POOL_CONTRACT_ID=CAW2...\nVITE_GOVERNANCE_CONTRACT_ID=CB7L...\nVITE_STELLAR_NETWORK=mainnet'}
         </Formula>
       </section>
 
