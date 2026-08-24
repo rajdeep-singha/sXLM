@@ -756,6 +756,21 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "MaxUtilizationBps"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 9000
+                          }
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "NativeToken"
                             }
                           ]
@@ -2772,7 +2787,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "caught panic 'withdrawal would make position unhealthy' from contract function 'Symbol(obj#765)'"
+                  "string": "caught panic 'withdrawal would make position unhealthy' from contract function 'Symbol(obj#781)'"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"

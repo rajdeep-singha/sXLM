@@ -6,6 +6,16 @@ const BPS_DENOMINATOR: i128 = 10_000;
 const RATE_PRECISION: i128 = 10_000_000; // 1e7
 const DEFAULT_LIQUIDATION_BONUS_BPS: i128 = 500; // 5% bonus
 
+/// Ceiling on how much of the lending reserve may be lent out at once.
+///
+/// Redepositing borrowed XLM as fresh collateral and borrowing again inflates
+/// reported TVL out of the same capital. Note that total borrowed over total
+/// collateral converges on the collateral factor either way, so that ratio
+/// cannot tell recursion apart from ordinary borrowing. What each loop does
+/// need is more XLM out of the reserve — so capping reserve utilisation is what
+/// actually bounds it, and it keeps exit liquidity in the pool.
+const DEFAULT_MAX_UTILIZATION_BPS: i128 = 9000; // 90% of the reserve
+
 // ---------- TTL constants ----------
 // Testnet: ~5s per ledger
 // 30 days  ≈  518_400 ledgers
@@ -25,6 +35,8 @@ pub enum DataKey {
     LiquidationThresholdBps,
     BorrowRateBps,
     LiquidationBonusBps,
+    /// Ceiling on total borrowing as a share of total collateral value.
+    MaxUtilizationBps,
     /// Address of the vault contract. The sXLM price is read from it rather
     /// than stored here, so no admin can set the number this contract values
     /// collateral at.
@@ -91,6 +103,13 @@ fn read_liquidation_threshold(env: &Env) -> i128 {
         .instance()
         .get(&DataKey::LiquidationThresholdBps)
         .unwrap_or(8000) // 80% default
+}
+
+fn read_max_utilization(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MaxUtilizationBps)
+        .unwrap_or(DEFAULT_MAX_UTILIZATION_BPS)
 }
 
 fn read_liquidation_bonus(env: &Env) -> i128 {
@@ -195,6 +214,7 @@ impl LendingContract {
         env.storage().instance().set(&DataKey::LiquidationThresholdBps, &(liquidation_threshold_bps as i128));
         env.storage().instance().set(&DataKey::BorrowRateBps, &(borrow_rate_bps as i128));
         env.storage().instance().set(&DataKey::LiquidationBonusBps, &DEFAULT_LIQUIDATION_BONUS_BPS);
+        env.storage().instance().set(&DataKey::MaxUtilizationBps, &DEFAULT_MAX_UTILIZATION_BPS);
         env.storage().instance().set(&DataKey::Vault, &vault);
         extend_instance(&env);
     }
@@ -234,6 +254,21 @@ impl LendingContract {
             (soroban_sdk::symbol_short!("vault_set"),),
             vault,
         );
+    }
+
+    /// Update the recursion cap. Only callable by admin.
+    pub fn update_max_utilization(env: Env, new_bps: u32) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+        assert!(new_bps > 0 && new_bps <= 10000, "invalid utilization cap");
+        extend_instance(&env);
+        env.storage().instance().set(&DataKey::MaxUtilizationBps, &(new_bps as i128));
+        env.events().publish((soroban_sdk::symbol_short!("util_upd"),), new_bps);
+    }
+
+    pub fn get_max_utilization(env: Env) -> i128 {
+        extend_instance(&env);
+        read_max_utilization(&env)
     }
 
     /// Update the collateral factor. Only callable by admin.
@@ -343,10 +378,11 @@ impl LendingContract {
         let max_borrow = collateral * er * cf_bps / (BPS_DENOMINATOR * RATE_PRECISION);
         assert!(new_borrowed <= max_borrow, "borrow exceeds collateral limit");
 
-        write_user_borrowed(&env, &user, new_borrowed);
-
         let total = read_i128(&env, &DataKey::TotalBorrowed);
-        write_i128(&env, &DataKey::TotalBorrowed, total + xlm_amount);
+        let new_total = total + xlm_amount;
+
+        write_user_borrowed(&env, &user, new_borrowed);
+        write_i128(&env, &DataKey::TotalBorrowed, new_total);
 
         let native = read_native_token(&env);
         let native_client = token::Client::new(&env, &native);
@@ -354,6 +390,16 @@ impl LendingContract {
         // Solvency check: ensure the pool has enough XLM to lend
         let pool_balance = native_client.balance(&env.current_contract_address());
         assert!(pool_balance >= xlm_amount, "insufficient pool liquidity");
+
+        // Reserve utilisation cap. Each turn of a recursive leverage loop has to
+        // draw more XLM out of the reserve, so this is the constraint that
+        // bounds it — and it leaves liquidity for lenders to exit.
+        let reserve_after = pool_balance - xlm_amount;
+        let max_utilization = read_max_utilization(&env);
+        assert!(
+            new_total * BPS_DENOMINATOR <= (reserve_after + new_total) * max_utilization,
+            "reserve utilization cap reached"
+        );
 
         native_client.transfer(&env.current_contract_address(), &user, &xlm_amount);
 
@@ -734,6 +780,37 @@ mod test {
         // Migration helper for pre-upgrade deployments; must not become a way
         // to repoint a live market at a vault that reports whatever suits.
         client.set_vault(&Address::generate(&env));
+    }
+
+    #[test]
+    fn recursion_is_bounded_by_reserve_utilization() {
+        let (env, contract_id, sxlm_id, native_id, user, _, _, _) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        client.update_max_utilization(&9000);
+
+        // Drain the reserve down to a size the cap can actually bite on.
+        let reserve = 1_000_0000000i128;
+        let contract_native = token::Client::new(&env, &native_id)
+            .balance(&contract_id);
+        // Move the surplus out so only `reserve` remains lendable.
+        env.as_contract(&contract_id, || {
+            token::Client::new(&env, &native_id).transfer(
+                &contract_id,
+                &Address::generate(&env),
+                &(contract_native - reserve),
+            );
+        });
+
+        StellarAssetClient::new(&env, &sxlm_id).mint(&user, &1_000_000_0000000);
+        client.deposit_collateral(&user, &100_000_0000000);
+
+        // 90% of a 1,000 XLM reserve is 900. Asking for 950 must fail.
+        let r = client.try_borrow(&user, &950_0000000);
+        assert!(r.is_err(), "utilization cap did not bind");
+
+        // 800 sits under the cap and goes through.
+        client.borrow(&user, &800_0000000);
+        assert_eq!(client.total_borrowed(), 800_0000000);
     }
 
     #[test]

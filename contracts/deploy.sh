@@ -183,7 +183,8 @@ stellar contract invoke \
   --admin "$ADMIN_PUB_KEY" \
   --sxlm_token "$TOKEN_CONTRACT_ID" \
   --native_token "$NATIVE_TOKEN_ID" \
-  --fee_bps 30
+  --fee_bps 30 \
+  --vault "$STAKING_CONTRACT_ID"
 
 echo "  LP Pool contract initialized"
 
