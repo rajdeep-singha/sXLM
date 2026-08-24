@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
-import { getTotalStaked, getTotalSupply } from "../staking-engine/contractClient.js";
-import { computeExchangeRate } from "../staking-engine/exchangeRateManager.js";
+import { getTotalStaked, getTotalSupply } from "../vault-engine/contractClient.js";
+import { computeExchangeRate } from "../vault-engine/exchangeRateManager.js";
 import { getEventBus, EventType } from "../event-bus/index.js";
 import { config } from "../config/index.js";
 

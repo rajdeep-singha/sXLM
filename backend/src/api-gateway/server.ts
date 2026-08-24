@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import { config } from "../config/index.js";
-import { StakingEngine } from "../staking-engine/index.js";
+import { StakingEngine } from "../vault-engine/index.js";
 import { RewardEngine } from "../reward-engine/index.js";
 import { UserService } from "../user-service/index.js";
 import { PrismaClient } from "@prisma/client";

@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, Address, BytesN, Env, Map, Vec,
+    contract, contractimpl, contracttype, token, Address, BytesN, Env, Map,
 };
 
 /// Precision multiplier for exchange rate calculations (7 decimals).
@@ -39,7 +39,6 @@ pub enum DataKey {
     /// not rise for remaining holders during the cooldown window.
     PendingWithdrawals,
     CooldownPeriod,
-    Validators,
     WithdrawalQueue,
     WithdrawalCounter,
     Initialized,
@@ -193,10 +192,10 @@ fn total_shares(env: &Env) -> i128 {
 }
 
 #[contract]
-pub struct StakingContract;
+pub struct VaultContract;
 
 #[contractimpl]
-impl StakingContract {
+impl VaultContract {
     /// Initialize the staking contract.
     pub fn initialize(
         env: Env,
@@ -537,13 +536,6 @@ impl StakingContract {
         );
     }
 
-    pub fn update_validators(env: Env, validators: Vec<Address>) {
-        let admin = read_admin(&env);
-        admin.require_auth();
-        extend_instance(&env);
-        env.storage().instance().set(&DataKey::Validators, &validators);
-    }
-
     pub fn set_admin(env: Env, new_admin: Address) {
         let admin = read_admin(&env);
         admin.require_auth();
@@ -665,14 +657,6 @@ impl StakingContract {
         queue.get(withdrawal_id).expect("withdrawal not found")
     }
 
-    pub fn get_validators(env: Env) -> Vec<Address> {
-        extend_instance(&env);
-        env.storage()
-            .instance()
-            .get(&DataKey::Validators)
-            .unwrap_or(Vec::new(&env))
-    }
-
     pub fn admin(env: Env) -> Address {
         extend_instance(&env);
         read_admin(&env)
@@ -768,7 +752,7 @@ mod test {
 
     struct Fixture<'a> {
         env: Env,
-        vault: StakingContractClient<'a>,
+        vault: VaultContractClient<'a>,
         vault_id: Address,
         sxlm: MockSxlmClient<'a>,
         xlm: token::Client<'a>,
@@ -784,9 +768,9 @@ mod test {
             .register_stellar_asset_contract_v2(admin.clone())
             .address();
         let sxlm_id = env.register_contract(None, MockSxlm);
-        let vault_id = env.register_contract(None, StakingContract);
+        let vault_id = env.register_contract(None, VaultContract);
 
-        let vault = StakingContractClient::new(env, &vault_id);
+        let vault = VaultContractClient::new(env, &vault_id);
         vault.initialize(&admin, &sxlm_id, &native_id, &17280u32);
 
         Fixture {

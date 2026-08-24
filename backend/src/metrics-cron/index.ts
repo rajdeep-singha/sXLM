@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import cron from "node-cron";
-import { getTotalStaked, getTotalSupply } from "../staking-engine/contractClient.js";
+import { getTotalStaked, getTotalSupply } from "../vault-engine/contractClient.js";
 
 let cronJob: cron.ScheduledTask | null = null;
 

@@ -17,7 +17,7 @@ import {
   callUpdateBorrowRate,
   callUpdateLiquidationThreshold,
   callSetLpProtocolFeeBps,
-} from "../../staking-engine/contractClient.js";
+} from "../../vault-engine/contractClient.js";
 
 const createProposalSchema = z.object({
   userAddress: z.string().min(56).max(56),

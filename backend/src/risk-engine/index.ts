@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { getEventBus, EventType } from "../event-bus/index.js";
 import { config } from "../config/index.js";
-import { callPause, callUnpause } from "../staking-engine/contractClient.js";
+import { callPause, callUnpause } from "../vault-engine/contractClient.js";
 
 let monitorInterval: ReturnType<typeof setInterval> | null = null;
 

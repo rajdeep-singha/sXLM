@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "sxlm-token",
-    "staking",
+    "vault",
     "lending",
     "lp-pool",
     "governance",

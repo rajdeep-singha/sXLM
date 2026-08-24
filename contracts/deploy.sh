@@ -28,12 +28,12 @@ cd "$SCRIPT_DIR"
 stellar contract build 2>&1 || cargo build --release --target wasm32v1-none
 
 TOKEN_WASM="$SCRIPT_DIR/target/wasm32v1-none/release/sxlm_token.wasm"
-STAKING_WASM="$SCRIPT_DIR/target/wasm32v1-none/release/sxlm_staking.wasm"
+VAULT_WASM="$SCRIPT_DIR/target/wasm32v1-none/release/sxlm_vault.wasm"
 LENDING_WASM="$SCRIPT_DIR/target/wasm32v1-none/release/sxlm_lending.wasm"
 LP_POOL_WASM="$SCRIPT_DIR/target/wasm32v1-none/release/sxlm_lp_pool.wasm"
 GOVERNANCE_WASM="$SCRIPT_DIR/target/wasm32v1-none/release/sxlm_governance.wasm"
 
-for wasm in "$TOKEN_WASM" "$STAKING_WASM" "$LENDING_WASM" "$LP_POOL_WASM" "$GOVERNANCE_WASM"; do
+for wasm in "$TOKEN_WASM" "$VAULT_WASM" "$LENDING_WASM" "$LP_POOL_WASM" "$GOVERNANCE_WASM"; do
   if [ ! -f "$wasm" ]; then
     echo "ERROR: WASM not found at $wasm"
     exit 1
@@ -59,12 +59,12 @@ echo "  Token Contract ID: $TOKEN_CONTRACT_ID"
 # ---------------------------------------------------------------------------
 echo "[3/10] Deploying Staking contract..."
 STAKING_CONTRACT_ID=$(stellar contract deploy \
-  --wasm "$STAKING_WASM" \
+  --wasm "$VAULT_WASM" \
   --source "$ACCOUNT" \
   --network "$NETWORK" \
   2>&1)
 
-echo "  Staking Contract ID: $STAKING_CONTRACT_ID"
+echo "  Vault Contract ID: $STAKING_CONTRACT_ID"
 
 # ---------------------------------------------------------------------------
 # Step 4: Deploy Lending contract
@@ -154,7 +154,7 @@ stellar contract invoke \
   --native_token "$NATIVE_TOKEN_ID" \
   --cooldown_period 17280
 
-echo "  Staking contract initialized"
+echo "  Vault contract initialized"
 
 echo "[10/10] Initializing Milestone 5 contracts..."
 

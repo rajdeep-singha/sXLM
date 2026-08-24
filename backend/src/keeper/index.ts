@@ -31,7 +31,7 @@ import {
   callCollectProtocolFees,
   getLpAccruedProtocolFees,
   getTreasuryBalance,
-} from "../staking-engine/contractClient.js";
+} from "../vault-engine/contractClient.js";
 
 const KEEPER_INTERVAL_MS = 6 * 60 * 60 * 1000;      // 6 hours
 const TTL_BUMP_INTERVAL_MS = 24 * 60 * 60 * 1000;    // 24 hours
