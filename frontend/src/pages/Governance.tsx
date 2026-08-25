@@ -26,14 +26,14 @@ export default function Governance() {
   } = useGovernance();
 
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [paramKey, setParamKey] = useState('protocol_fee_bps');
+  const [paramKey, setParamKey] = useState('fee_bps');
   const [newValue, setNewValue] = useState('');
   const [voteAmounts, setVoteAmounts] = useState<Record<number, string>>({});
 
   const handleCreateProposal = async () => {
     if (!newValue) return;
     clearError();
-    const success = await createProposal(paramKey, newValue);
+    const success = await createProposal(paramKey, Number(newValue));
     if (success) {
       setNewValue('');
       setShowCreateForm(false);
@@ -138,17 +138,14 @@ export default function Governance() {
               onChange={(e) => setParamKey(e.target.value)}
               className="input"
             >
-              {params.map((p) => (
-                <option key={p.key} value={p.key}>{p.description} ({p.key})</option>
-              ))}
-              {params.length === 0 && (
-                <>
-                  <option value="protocol_fee_bps">Protocol Fee (bps)</option>
-                  <option value="cooldown_period">Cooldown Period (ledgers)</option>
-                  <option value="collateral_factor">Collateral Factor (bps)</option>
-                  <option value="buffer_safety_factor">Buffer Safety Factor</option>
-                </>
-              )}
+              {/* Fixed set: a proposal naming anything else would pass the vote
+                  and then revert when it reached the contract. */}
+              <option value="fee_bps">Protocol fee (bps) — vault</option>
+              <option value="cooldown">Withdrawal cooldown (ledgers) — vault</option>
+              <option value="coll_fact">Collateral factor (bps) — lending</option>
+              <option value="liq_thres">Liquidation threshold (bps) — lending</option>
+              <option value="bor_rate">Borrow rate (bps) — lending</option>
+              <option value="max_util">Reserve utilisation cap (bps) — lending</option>
             </select>
           </div>
           <div>

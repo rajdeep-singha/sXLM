@@ -1,7 +1,7 @@
 {
   "name": "sxlm-protocol-backend",
   "version": "1.0.0",
-  "description": "Backend services for sXLM liquid staking protocol on Stellar/Soroban",
+  "description": "Backend services for the StelloFi yield-bearing XLM vault on Stellar/Soroban",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

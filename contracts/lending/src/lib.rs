@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol};
 
 const BPS_DENOMINATOR: i128 = 10_000;
 const RATE_PRECISION: i128 = 10_000_000; // 1e7
@@ -37,6 +37,8 @@ pub enum DataKey {
     LiquidationBonusBps,
     /// Ceiling on total borrowing as a share of total collateral value.
     MaxUtilizationBps,
+    /// Governance contract, the only caller allowed to change parameters.
+    Governance,
     /// Address of the vault contract. The sXLM price is read from it rather
     /// than stored here, so no admin can set the number this contract values
     /// collateral at.
@@ -103,6 +105,14 @@ fn read_liquidation_threshold(env: &Env) -> i128 {
         .instance()
         .get(&DataKey::LiquidationThresholdBps)
         .unwrap_or(8000) // 80% default
+}
+
+/// Authorise a parameter change: governance once configured, admin until then.
+fn require_param_authority(env: &Env) {
+    match env.storage().instance().get::<DataKey, Address>(&DataKey::Governance) {
+        Some(gov) => gov.require_auth(),
+        None => read_admin(env).require_auth(),
+    }
 }
 
 fn read_max_utilization(env: &Env) -> i128 {
@@ -254,6 +264,47 @@ impl LendingContract {
             (soroban_sdk::symbol_short!("vault_set"),),
             vault,
         );
+    }
+
+    /// Hand parameter control to the governance contract, once.
+    pub fn set_governance(env: Env, governance: Address) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+        if env.storage().instance().has(&DataKey::Governance) {
+            panic!("governance already set");
+        }
+        extend_instance(&env);
+        env.storage().instance().set(&DataKey::Governance, &governance);
+        env.events().publish((soroban_sdk::symbol_short!("gov_set"),), governance);
+    }
+
+    pub fn governance(env: Env) -> Address {
+        extend_instance(&env);
+        env.storage().instance().get(&DataKey::Governance).expect("governance not configured")
+    }
+
+    /// Apply a governance-approved parameter change.
+    pub fn set_param(env: Env, key: Symbol, value: i128) {
+        require_param_authority(&env);
+        extend_instance(&env);
+
+        if key == soroban_sdk::symbol_short!("coll_fact") {
+            assert!(value > 0 && value <= BPS_DENOMINATOR, "collateral factor out of range");
+            env.storage().instance().set(&DataKey::CollateralFactorBps, &value);
+        } else if key == soroban_sdk::symbol_short!("liq_thres") {
+            assert!(value > 0 && value <= BPS_DENOMINATOR, "threshold out of range");
+            env.storage().instance().set(&DataKey::LiquidationThresholdBps, &value);
+        } else if key == soroban_sdk::symbol_short!("bor_rate") {
+            assert!(value >= 0 && value <= BPS_DENOMINATOR, "borrow rate out of range");
+            env.storage().instance().set(&DataKey::BorrowRateBps, &value);
+        } else if key == soroban_sdk::symbol_short!("max_util") {
+            assert!(value > 0 && value <= BPS_DENOMINATOR, "utilization out of range");
+            env.storage().instance().set(&DataKey::MaxUtilizationBps, &value);
+        } else {
+            panic!("unknown parameter");
+        }
+
+        env.events().publish((soroban_sdk::symbol_short!("param"),), (key, value));
     }
 
     /// Update the recursion cap. Only callable by admin.

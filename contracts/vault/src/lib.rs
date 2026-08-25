@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, Address, BytesN, Env, Map,
+    contract, contractimpl, contracttype, token, Address, BytesN, Env, Map, Symbol,
 };
 
 /// Precision multiplier for exchange rate calculations (7 decimals).
@@ -11,8 +11,8 @@ use soroban_sdk::{
 /// digits that cannot correspond to anything the contract can actually pay out.
 const RATE_PRECISION: i128 = 10_000_000; // 1e7
 
-/// Protocol fee in basis points (1000 = 10%).
-const PROTOCOL_FEE_BPS: i128 = 1000;
+/// Default protocol fee in basis points (1000 = 10%). Governance may change it.
+const DEFAULT_PROTOCOL_FEE_BPS: i128 = 1000;
 const BPS_DENOMINATOR: i128 = 10_000;
 
 /// Shares burned to the contract itself on the first deposit so that the share
@@ -47,6 +47,10 @@ pub enum DataKey {
     TreasuryBalance,
     /// One-shot marker for the v2 storage migration.
     MigratedV2,
+    /// Governance contract, the only caller allowed to change parameters.
+    Governance,
+    /// Protocol fee, storage-backed so governance can move it.
+    ProtocolFeeBps,
 }
 
 #[derive(Clone)]
@@ -93,6 +97,23 @@ fn read_sxlm_token(env: &Env) -> Address {
 
 fn read_native_token(env: &Env) -> Address {
     env.storage().instance().get(&DataKey::NativeToken).unwrap()
+}
+
+fn read_protocol_fee_bps(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ProtocolFeeBps)
+        .unwrap_or(DEFAULT_PROTOCOL_FEE_BPS)
+}
+
+/// Authorise a parameter change. Governance holds this power once configured;
+/// until then the admin does, so a contract cannot be left with no way to be
+/// configured at all.
+fn require_param_authority(env: &Env) {
+    match env.storage().instance().get::<DataKey, Address>(&DataKey::Governance) {
+        Some(gov) => gov.require_auth(),
+        None => read_admin(env).require_auth(),
+    }
 }
 
 fn read_cooldown(env: &Env) -> u32 {
@@ -452,7 +473,7 @@ impl VaultContract {
         let xlm_client = token::Client::new(&env, &native_token_addr);
         xlm_client.transfer(&from, &env.current_contract_address(), &amount);
 
-        let fee = amount * PROTOCOL_FEE_BPS / BPS_DENOMINATOR;
+        let fee = amount * read_protocol_fee_bps(&env) / BPS_DENOMINATOR;
         let net_reward = amount - fee;
 
         let treasury_bal = read_i128(&env, &DataKey::TreasuryBalance);
@@ -541,6 +562,44 @@ impl VaultContract {
         admin.require_auth();
         extend_instance(&env);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+    }
+
+    /// Hand parameter control to the governance contract, once.
+    ///
+    /// This is the step that makes a passed proposal actually do something. It
+    /// is deliberately separate from deploying the code: handing over control
+    /// of a live contract is a decision, not a side effect of an upgrade.
+    pub fn set_governance(env: Env, governance: Address) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+        if env.storage().instance().has(&DataKey::Governance) {
+            panic!("governance already set");
+        }
+        extend_instance(&env);
+        env.storage().instance().set(&DataKey::Governance, &governance);
+        env.events().publish((soroban_sdk::symbol_short!("gov_set"),), governance);
+    }
+
+    /// Apply a governance-approved parameter change.
+    ///
+    /// Only the configured governance contract may call this, and only these
+    /// keys exist — an approved proposal naming anything else does nothing
+    /// rather than silently succeeding.
+    pub fn set_param(env: Env, key: Symbol, value: i128) {
+        require_param_authority(&env);
+        extend_instance(&env);
+
+        if key == soroban_sdk::symbol_short!("cooldown") {
+            assert!(value >= 0 && value <= u32::MAX as i128, "cooldown out of range");
+            env.storage().instance().set(&DataKey::CooldownPeriod, &(value as u32));
+        } else if key == soroban_sdk::symbol_short!("fee_bps") {
+            assert!(value >= 0 && value <= BPS_DENOMINATOR, "fee out of range");
+            write_i128(&env, &DataKey::ProtocolFeeBps, value);
+        } else {
+            panic!("unknown parameter");
+        }
+
+        env.events().publish((soroban_sdk::symbol_short!("param"),), (key, value));
     }
 
     pub fn set_cooldown_period(env: Env, new_cooldown: u32) {
@@ -643,7 +702,15 @@ impl VaultContract {
 
     pub fn protocol_fee_bps(env: Env) -> i128 {
         extend_instance(&env);
-        PROTOCOL_FEE_BPS
+        read_protocol_fee_bps(&env)
+    }
+
+    pub fn governance(env: Env) -> Address {
+        extend_instance(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::Governance)
+            .expect("governance not configured")
     }
 
     pub fn get_cooldown_period(env: Env) -> u32 {

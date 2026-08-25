@@ -19,10 +19,28 @@ import {
   callSetLpProtocolFeeBps,
 } from "../../vault-engine/contractClient.js";
 
+/**
+ * Parameters governance can change, and where each one lives.
+ *
+ * A proposal names a target contract and a symbol that contract recognises.
+ * Anything outside this table would be approved by voters and then revert at
+ * execution, so the set is fixed here rather than accepted as free text.
+ */
+const GOVERNABLE_PARAMS = {
+  fee_bps:   { target: "vault",   symbol: "fee_bps",   label: "Protocol fee (bps)",            max: 10000 },
+  cooldown:  { target: "vault",   symbol: "cooldown",  label: "Withdrawal cooldown (ledgers)", max: 2_000_000 },
+  coll_fact: { target: "lending", symbol: "coll_fact", label: "Collateral factor (bps)",       max: 10000 },
+  liq_thres: { target: "lending", symbol: "liq_thres", label: "Liquidation threshold (bps)",   max: 10000 },
+  bor_rate:  { target: "lending", symbol: "bor_rate",  label: "Borrow rate (bps)",             max: 10000 },
+  max_util:  { target: "lending", symbol: "max_util",  label: "Reserve utilisation cap (bps)", max: 10000 },
+} as const;
+
+type ParamKey = keyof typeof GOVERNABLE_PARAMS;
+
 const createProposalSchema = z.object({
   userAddress: z.string().min(56).max(56),
-  paramKey: z.string().min(1),
-  newValue: z.string().min(1),
+  paramKey: z.enum(Object.keys(GOVERNABLE_PARAMS) as [ParamKey, ...ParamKey[]]),
+  newValue: z.number().int().nonnegative(),
 });
 
 const voteSchema = z.object({
@@ -165,6 +183,18 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
   fastify.post("/governance/create-proposal", async (request, reply) => {
     try {
       const body = createProposalSchema.parse(request.body);
+      const param = GOVERNABLE_PARAMS[body.paramKey];
+
+      if (body.newValue > param.max) {
+        return reply.status(400).send({
+          error: `${param.label} cannot exceed ${param.max}.`,
+        });
+      }
+
+      const targetId =
+        param.target === "vault"
+          ? config.contracts.stakingContractId
+          : config.contracts.lendingContractId;
 
       const result = await buildContractTx(
         server,
@@ -172,8 +202,9 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
         "create_proposal",
         [
           new Address(body.userAddress).toScVal(),
-          nativeToScVal(body.paramKey, { type: "string" }),
-          nativeToScVal(body.newValue, { type: "string" }),
+          new Address(targetId).toScVal(),
+          nativeToScVal(param.symbol, { type: "symbol" }),
+          nativeToScVal(BigInt(body.newValue), { type: "i128" }),
         ],
         body.userAddress
       );
@@ -184,7 +215,7 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
         data: {
           proposer: body.userAddress,
           paramKey: body.paramKey,
-          newValue: body.newValue,
+          newValue: String(body.newValue),
           status: "active",
           expiresAt: new Date(
             Date.now() + votingPeriodLedgers * 5 * 1000 // ~5s per ledger

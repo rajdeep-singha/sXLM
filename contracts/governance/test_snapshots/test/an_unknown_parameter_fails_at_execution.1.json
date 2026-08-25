@@ -23,12 +23,12 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
                 },
                 {
-                  "symbol": "fee_bps"
+                  "symbol": "nonsense"
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 750
+                    "lo": 1
                   }
                 }
               ]
@@ -97,7 +97,7 @@
   ],
   "ledger": {
     "protocol_version": 21,
-    "sequence_number": 101,
+    "sequence_number": 151,
     "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
@@ -333,7 +333,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 750
+                          "lo": 1
                         }
                       }
                     },
@@ -342,7 +342,7 @@
                         "symbol": "param_key"
                       },
                       "val": {
-                        "symbol": "fee_bps"
+                        "symbol": "nonsense"
                       }
                     },
                     {
@@ -896,12 +896,12 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
                 },
                 {
-                  "symbol": "fee_bps"
+                  "symbol": "nonsense"
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 750
+                    "lo": 1
                   }
                 }
               ]
@@ -1034,7 +1034,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "symbol": "fee_bps"
+                  "symbol": "nonsense"
                 }
               ]
             }
@@ -1260,18 +1260,155 @@
           "v0": {
             "topics": [
               {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000006"
+              },
+              {
+                "symbol": "set_param"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "symbol": "nonsense"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 1
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000006",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
                 "symbol": "log"
               }
             ],
             "data": {
               "vec": [
                 {
-                  "string": "caught panic 'timelock has not elapsed' from contract function 'Symbol(obj#265)'"
+                  "string": "caught panic 'unknown parameter' from contract function 'Symbol(set_param)'"
                 },
                 {
-                  "u64": 0
+                  "symbol": "nonsense"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 1
+                  }
                 }
               ]
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000006",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "wasm_vm": "invalid_action"
+                }
+              }
+            ],
+            "data": {
+              "string": "caught error from function"
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "wasm_vm": "invalid_action"
+                }
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "string": "contract call failed"
+                },
+                {
+                  "symbol": "set_param"
+                },
+                {
+                  "vec": [
+                    {
+                      "symbol": "nonsense"
+                    },
+                    {
+                      "i128": {
+                        "hi": 0,
+                        "lo": 1
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": true
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "error"
+              },
+              {
+                "error": {
+                  "wasm_vm": "invalid_action"
+                }
+              }
+            ],
+            "data": {
+              "string": "escalating error to panic"
             }
           }
         }

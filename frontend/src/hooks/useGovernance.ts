@@ -30,7 +30,7 @@ interface UseGovernanceReturn {
   isSubmitting: boolean;
   error: string | null;
   lastTxHash: string | null;
-  createProposal: (paramKey: string, newValue: string) => Promise<boolean>;
+  createProposal: (paramKey: string, newValue: number) => Promise<boolean>;
   vote: (proposalId: number, support: boolean, amount: number) => Promise<boolean>;
   executeProposal: (proposalId: number) => Promise<boolean>;
   clearError: () => void;
@@ -120,7 +120,7 @@ export function useGovernance(): UseGovernanceReturn {
   );
 
   const createProposal = useCallback(
-    (paramKey: string, newValue: string) =>
+    (paramKey: string, newValue: number) =>
       submitGovTx('create-proposal', { paramKey, newValue }),
     [submitGovTx]
   );
