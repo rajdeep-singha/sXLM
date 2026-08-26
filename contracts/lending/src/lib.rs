@@ -135,11 +135,9 @@ fn read_vault(env: &Env) -> Option<Address> {
 
 /// sXLM → XLM rate, computed by the vault from its assets and share supply.
 ///
-/// This is a cross-contract read on purpose. The previous build stored the rate
-/// and let the admin write it, which meant collateral could be revalued at will
-/// — borrow against an inflated number, or liquidate against a deflated one.
-/// Falls back to 1:1 only while no vault is configured, which is the state a
-/// pre-upgrade contract is in until `set_vault` is called once.
+/// Read cross-contract so no admin can revalue collateral. Falls back to 1:1
+/// only while no vault is configured — the state of a contract upgraded before
+/// `set_vault` has been called.
 fn read_exchange_rate(env: &Env) -> i128 {
     match read_vault(env) {
         Some(vault) => VaultClient::new(env, &vault).get_exchange_rate(),
@@ -506,11 +504,8 @@ impl LendingContract {
         // Liquidator receives sXLM worth (debt + 5% bonus) in XLM value
         // sxlm_to_seize = borrowed * (1 + bonus_bps/BPS) * RATE_PRECISION / exchange_rate
         //
-        // The rate is a live read from the vault and can legitimately be zero if
-        // the vault has shares outstanding against no assets. Dividing by it
-        // then would fail as an arithmetic error rather than something a caller
-        // can act on, so refuse explicitly: worthless collateral cannot be
-        // priced, and seizing it would settle the debt for nothing.
+        // The rate can be zero when the vault has shares against no assets.
+        // Refuse explicitly rather than failing as a division error.
         assert!(er > 0, "vault reports no assets; collateral cannot be priced");
         let bonus_bps = read_liquidation_bonus(&env);
         let debt_with_bonus = borrowed * (BPS_DENOMINATOR + bonus_bps) / BPS_DENOMINATOR;
@@ -871,8 +866,7 @@ mod test {
         assert_eq!(client.total_borrowed(), 800_0000000);
     }
 
-    /// The vault reporting a zero rate is a real state — shares outstanding
-    /// against no assets. Liquidation used to divide by it.
+    /// A zero rate is reachable: shares outstanding against no assets.
     #[test]
     #[should_panic(expected = "vault reports no assets")]
     fn liquidation_refuses_a_zero_vault_rate() {

@@ -252,14 +252,12 @@ impl VaultContract {
     /// One-shot storage migration for a contract deployed before derived
     /// accounting.
     ///
-    /// The old build burned shares for queued withdrawals without ever
-    /// recording the matching liability. Upgrading without this call would let
-    /// `total_assets()` count XLM that is already owed to the queue, so the
-    /// exchange rate would jump for whoever is still holding shares. This
-    /// reconstructs the liability from the queue itself.
+    /// Reconstructs `PendingWithdrawals` by summing unclaimed queue entries.
+    /// Required once on any contract upgraded from a build that did not record
+    /// the liability, or `total_assets()` counts XLM already owed to the queue.
     ///
-    /// The legacy `TotalXlmStaked`, `TotalSxlmSupply` and `LiquidityBuffer`
-    /// entries are intentionally left orphaned; nothing reads them any more.
+    /// Legacy `TotalXlmStaked`, `TotalSxlmSupply` and `LiquidityBuffer` entries
+    /// are left orphaned; nothing reads them.
     pub fn migrate_v2(env: Env) {
         let admin = read_admin(&env);
         admin.require_auth();
@@ -537,9 +535,8 @@ impl VaultContract {
 
     /// Donate XLM to the vault with no shares minted in return.
     ///
-    /// Unlike the previous build this credits no separate buffer counter — the
-    /// donated XLM is simply part of the balance, so it backs shares like every
-    /// other asset instead of being invisible to the exchange rate.
+    /// No separate buffer counter: the donated XLM is part of the balance, so it
+    /// backs shares like any other asset.
     pub fn add_liquidity(env: Env, from: Address, amount: i128) {
         from.require_auth();
         if amount <= 0 {
@@ -972,11 +969,8 @@ mod test {
         assert_eq!(f.vault.pending_withdrawals(), 0);
     }
 
-    /// The mainnet bug, reproduced at the accounting layer.
-    ///
-    /// The old build burned shares for a queued withdrawal and left the XLM
-    /// counted as backing, so the rate rose for everyone still holding. Here
-    /// the liability is subtracted, so it does not.
+    /// A queued withdrawal's XLM is a liability, not backing. Shares are already
+    /// burned, so counting it would appreciate everyone else's.
     #[test]
     fn pending_withdrawals_are_excluded_from_share_backing() {
         let env = Env::default();

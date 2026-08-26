@@ -260,11 +260,9 @@ impl GovernanceContract {
 
     /// Vote on a proposal by escrowing sXLM for the length of the vote.
     ///
-    /// The previous build weighted votes by a live `balance()` call, so the
-    /// same tokens could be bought, voted with, and sold inside one ledger —
-    /// and could vote on every proposal at once. Escrow makes the voter hold
-    /// the position for the voting period instead of borrowing it for an
-    /// instant. Tokens are returned by `unlock_vote` once voting closes.
+    /// Weight is the amount escrowed, so the same shares cannot vote twice or
+    /// be sold in the same ledger they voted in. Returned by `unlock_vote` once
+    /// voting closes.
     pub fn vote(env: Env, voter: Address, proposal_id: u64, support: bool, amount: i128) {
         voter.require_auth();
         extend_instance(&env);
@@ -365,9 +363,7 @@ impl GovernanceContract {
         // it can take effect, which is the whole point of having one.
         assert!(current_ledger >= proposal.eta, "timelock has not elapsed");
 
-        // Quorum against the supply snapshot taken at creation. This check is
-        // unconditional: the previous build skipped it entirely whenever the
-        // admin-set reference supply was zero, which was its initial value.
+        // Quorum against the supply snapshot taken at creation. Unconditional.
         let total_votes = proposal.votes_for + proposal.votes_against;
         assert!(total_votes > 0, "no votes cast");
 
@@ -622,9 +618,8 @@ mod test {
         assert_eq!(f.gov.get_vote_count(&id), (5_000_0000000, 0));
     }
 
-    /// The attack the old build allowed: weight came from a live balance read,
-    /// so shares could be voted and then moved on in the same ledger. Escrow
-    /// means the second voter simply does not have them.
+    /// Escrow means shares voted with are no longer transferable, so a second
+    /// voter cannot receive and reuse them.
     #[test]
     #[should_panic(expected = "insufficient balance")]
     fn the_same_shares_cannot_vote_twice() {
@@ -704,8 +699,8 @@ mod test {
         assert!(f.gov.get_proposal(&id).executed);
     }
 
-    /// Quorum used to be skipped whenever the admin-set reference supply was
-    /// zero, which is what it was initialised to. It is now unconditional.
+    /// Quorum is measured against the creation-time supply snapshot and always
+    /// applies.
     #[test]
     #[should_panic(expected = "quorum not met")]
     fn quorum_is_enforced() {

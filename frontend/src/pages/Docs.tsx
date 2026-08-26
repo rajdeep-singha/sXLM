@@ -493,10 +493,9 @@ function DocContent() {
           ))}
         </div>
         <P>
-          <strong className="text-black font-medium">There is no oracle.</strong> Earlier drafts of this page described TWAP pricing,
-          stale-price rejection, fallback routes and circuit breakers. None of that exists, and none of it is needed
-          while sXLM is priced from vault assets and shares rather than from a market feed. It becomes necessary the
-          moment a strategy or a second collateral asset is added.
+          <strong className="text-black font-medium">There is no oracle.</strong> sXLM is priced from vault assets and shares,
+          not from a market feed, so there is no price to harden. One becomes necessary the moment a strategy or a
+          second collateral asset is added.
         </P>
       </section>
 
@@ -512,8 +511,7 @@ function DocContent() {
         </P>
         <P>
           When a withdrawal does queue, its XLM is recorded as a liability the moment the shares are burned, so the
-          exchange rate does not rise for remaining holders during the wait. Earlier drafts described a target buffer
-          ratio adjusted against market stress; no such targeting is implemented, and none is meaningful while the
+          exchange rate does not rise for remaining holders during the wait. No buffer targeting is implemented; the
           buffer is the entire balance.
         </P>
 
@@ -530,13 +528,10 @@ function DocContent() {
       {/* ── INSURANCE FUND ── */}
       <section id="current-limits" className="scroll-mt-20">
         <H2 id="limits-h">Current Limits</H2>
-        <P>
-          What the protocol does not yet do, stated plainly, because the alternative is describing machinery that
-          does not exist:
-        </P>
+        <P>What the protocol does not yet do:</P>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-4">
           {[
-            { title: 'No insurance fund', desc: 'Losses are not backstopped. Earlier drafts described a fee-funded fund absorbing bad debt; it was never built.' },
+            { title: 'No insurance fund', desc: 'Losses are not backstopped.' },
             { title: 'No strategy allocation', desc: 'The vault holds idle XLM. Nothing is routed to lending markets or AMMs, so nothing generates revenue.' },
             { title: 'No oracle', desc: 'sXLM is priced from vault assets and shares. There is no external price feed, and therefore no feed to harden.' },
             { title: 'Unaudited', desc: 'Deployed on mainnet with source not yet verified on public explorers. Treat it accordingly.' },

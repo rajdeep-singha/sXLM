@@ -20,13 +20,8 @@ const CHECK_INTERVAL_MS = 5 * 60 * 1000;
  *
  *   total assets >= redeemable liabilities, unless a loss event is declared
  *
- * Everything this service used to do was validator monitoring — uptime scores,
- * allocation drift, reallocation between validators. Stellar has no validator
- * staking, so that was watching a fiction. This watches balances instead.
- *
- * The wider risk surface the docs describe — strategy exposure, oracle status,
- * collateral concentration — needs the strategy registry before it can be
- * measured, and is deliberately absent rather than stubbed.
+ * Strategy exposure and collateral concentration are not monitored; they need
+ * the strategy registry before they can be measured.
  */
 export class RiskEngine {
   private prisma: PrismaClient;
