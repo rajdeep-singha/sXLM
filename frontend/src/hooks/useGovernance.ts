@@ -19,7 +19,7 @@ interface Proposal {
 
 interface GovParam {
   key: string;
-  currentValue: string;
+  currentValue: string | null;
   description: string;
 }
 

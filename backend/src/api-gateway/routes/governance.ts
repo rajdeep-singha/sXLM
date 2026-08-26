@@ -11,13 +11,6 @@ import {
 } from "@stellar/stellar-sdk";
 import { config } from "../../config/index.js";
 import { PrismaClient } from "@prisma/client";
-import {
-  callSetCooldownPeriod,
-  callUpdateCollateralFactor,
-  callUpdateBorrowRate,
-  callUpdateLiquidationThreshold,
-  callSetLpProtocolFeeBps,
-} from "../../vault-engine/contractClient.js";
 
 /**
  * Parameters governance can change, and where each one lives.
@@ -127,46 +120,6 @@ async function queryContractView(
   return null;
 }
 
-/**
- * Apply a governance parameter change to the relevant contract.
- * Called after a proposal is successfully executed on-chain.
- */
-async function applyGovernanceParam(paramKey: string, newValue: string): Promise<void> {
-  const value = parseInt(newValue, 10);
-  if (isNaN(value)) {
-    console.warn(`[Governance] Cannot apply param "${paramKey}": invalid value "${newValue}"`);
-    return;
-  }
-
-  try {
-    switch (paramKey) {
-      case "cooldown_period":
-        await callSetCooldownPeriod(value);
-        console.log(`[Governance] Applied cooldown_period = ${value}`);
-        break;
-      case "collateral_factor":
-        await callUpdateCollateralFactor(value);
-        console.log(`[Governance] Applied collateral_factor = ${value} bps`);
-        break;
-      case "borrow_rate_bps":
-        await callUpdateBorrowRate(value);
-        console.log(`[Governance] Applied borrow_rate_bps = ${value}`);
-        break;
-      case "liquidation_threshold":
-        await callUpdateLiquidationThreshold(value);
-        console.log(`[Governance] Applied liquidation_threshold = ${value} bps`);
-        break;
-      case "lp_protocol_fee_bps":
-        await callSetLpProtocolFeeBps(value);
-        console.log(`[Governance] Applied lp_protocol_fee_bps = ${value}`);
-        break;
-      default:
-        console.log(`[Governance] Param "${paramKey}" does not map to a contract call — governance-only param`);
-    }
-  } catch (err) {
-    console.error(`[Governance] Failed to apply param "${paramKey}" = "${newValue}":`, err);
-  }
-}
 
 export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = async (
   fastify,
@@ -302,8 +255,8 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
           data: { status: "executed" },
         });
 
-        // Apply the governance parameter to the relevant contract
-        await applyGovernanceParam(dbProposal.paramKey, dbProposal.newValue);
+        // The contract applies the parameter itself during execute_proposal.
+        // Re-applying it here with the admin key would bypass governance.
       }
 
       return result;
@@ -506,36 +459,43 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
 
   /**
    * GET /governance/params
-   * Get current governable parameters.
+   *
+   * Live values read from the contract that owns each parameter, not from
+   * governance's record of the last approved value — the contract is what
+   * actually applies.
    */
   fastify.get("/governance/params", async () => {
-    const paramKeys = [
-      { key: "protocol_fee_bps", defaultValue: "1000", description: "Protocol fee in basis points (10% = 1000)" },
-      { key: "cooldown_period", defaultValue: "17280", description: "Withdrawal cooldown in ledgers (~24h)" },
-      { key: "collateral_factor", defaultValue: "7000", description: "Lending collateral factor in bps (70%)" },
-      { key: "borrow_rate_bps", defaultValue: "400", description: "Lending borrow rate in basis points (4% = 400)" },
-      { key: "liquidation_threshold", defaultValue: "8000", description: "Liquidation threshold in bps (80% = 8000)" },
-      { key: "lp_protocol_fee_bps", defaultValue: "5", description: "LP pool protocol fee in basis points (5 = 0.05% of swap input)" },
-      { key: "buffer_safety_factor", defaultValue: "250", description: "Liquidity buffer safety factor (2.5x)" },
+    const vaultId = config.contracts.stakingContractId;
+    const lendingId = config.contracts.lendingContractId;
+
+    const sources: Array<{
+      key: keyof typeof GOVERNABLE_PARAMS;
+      contract: string;
+      method: string;
+    }> = [
+      { key: "fee_bps",   contract: vaultId,   method: "protocol_fee_bps" },
+      { key: "cooldown",  contract: vaultId,   method: "get_cooldown_period" },
+      { key: "coll_fact", contract: lendingId, method: "get_collateral_factor" },
+      { key: "liq_thres", contract: lendingId, method: "get_liquidation_threshold" },
+      { key: "bor_rate",  contract: lendingId, method: "get_borrow_rate" },
+      { key: "max_util",  contract: lendingId, method: "get_max_utilization" },
     ];
 
     const params = await Promise.all(
-      paramKeys.map(async ({ key, defaultValue, description }) => {
-        let currentValue = defaultValue;
+      sources.map(async ({ key, contract, method }) => {
+        const meta = GOVERNABLE_PARAMS[key];
         try {
-          const onChainValue = await queryContractView(
-            server,
-            govContractId,
-            "get_param",
-            [nativeToScVal(key, { type: "string" })]
-          );
-          if (onChainValue && String(onChainValue) !== "") {
-            currentValue = String(onChainValue);
-          }
+          const value = await queryContractView(server, contract, method, []);
+          return {
+            key,
+            description: meta.label,
+            currentValue: value === null ? null : String(value),
+          };
         } catch {
-          // Use default if on-chain query fails
+          // Null rather than a plausible-looking default: an unreachable
+          // contract should read as unknown, not as a number someone might act on.
+          return { key, description: meta.label, currentValue: null };
         }
-        return { key, currentValue, description };
       })
     );
 

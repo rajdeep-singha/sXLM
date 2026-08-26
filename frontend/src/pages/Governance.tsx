@@ -101,7 +101,12 @@ export default function Governance() {
             {params.map((p) => (
               <div key={p.key} className="bg-[#F5F5F5] rounded-xl p-3">
                 <p className="text-xs text-gray-500">{p.description}</p>
-                <p className="text-sm text-black font-medium mt-1">{p.key}: <span className="font-semibold">{p.currentValue}</span></p>
+                <p className="text-sm text-black font-medium mt-1">
+                  {p.key}:{' '}
+                  <span className="font-semibold">
+                    {p.currentValue ?? <span className="text-black/40 font-normal">unavailable</span>}
+                  </span>
+                </p>
               </div>
             ))}
           </div>
