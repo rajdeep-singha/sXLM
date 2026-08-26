@@ -2,9 +2,6 @@
 
 A yield-bearing XLM vault on Stellar, built on Soroban. Deposit XLM to receive **sXLM**, a share token representing a proportional claim on pooled XLM, usable as collateral in the lending market and in the XLM/sXLM pool.
 
-> **Status.** The contracts are deployed on Stellar **mainnet** and their source is **not verified** on public explorers. Treat the protocol as unaudited. There is no strategy allocation yet, so the vault holds idle XLM and the exchange rate does not rise on its own — see [Yield](#yield).
-
-Stellar has no native staking rewards and no validator slashing. This is a vault, not a liquid staking protocol; earlier versions of this repository described it as the latter.
 
 ---
 ## User FeedBack
