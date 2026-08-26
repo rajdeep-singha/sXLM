@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
-import { getTotalStaked, getTotalSupply, callUpdateLendingExchangeRate } from "../staking-engine/contractClient.js";
-import { computeExchangeRate } from "../staking-engine/exchangeRateManager.js";
+import { getTotalStaked, getTotalSupply } from "../vault-engine/contractClient.js";
+import { computeExchangeRate } from "../vault-engine/exchangeRateManager.js";
 import { getEventBus, EventType } from "../event-bus/index.js";
 import { config } from "../config/index.js";
 
@@ -69,10 +69,8 @@ export class RewardEngine {
       },
     });
 
-    // Sync exchange rate to lending contract (best effort — don't fail snapshot on error)
-    callUpdateLendingExchangeRate(exchangeRate).catch((err) =>
-      console.warn("[RewardEngine] Lending rate sync failed (non-fatal):", err)
-    );
+    // No rate sync: the lending contract reads the vault directly now, so there
+    // is nothing for this service to push and nothing that drifts if it stops.
 
     // Publish reward update event
     const eventBus = getEventBus();

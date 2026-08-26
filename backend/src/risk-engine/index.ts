@@ -1,407 +1,152 @@
 import { PrismaClient } from "@prisma/client";
-import { getEventBus, EventType } from "../event-bus/index.js";
+import {
+  callPause,
+  callUnpause,
+  getIdleBalance,
+  getPendingWithdrawals,
+  getTreasuryBalance,
+  getTotalStaked,
+  getTotalSupply,
+  getIsPaused,
+} from "../vault-engine/contractClient.js";
 import { config } from "../config/index.js";
-import { callApplySlashing, callPause, callUnpause } from "../staking-engine/contractClient.js";
 
-let monitorInterval: ReturnType<typeof setInterval> | null = null;
+const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
-interface ReallocationPlan {
-  fromValidator: string;
-  toValidator: string;
-  amount: bigint;
-}
-
+/**
+ * Risk Engine
+ *
+ * Watches the one invariant the protocol documentation actually commits to:
+ *
+ *   total assets >= redeemable liabilities, unless a loss event is declared
+ *
+ * Everything this service used to do was validator monitoring — uptime scores,
+ * allocation drift, reallocation between validators. Stellar has no validator
+ * staking, so that was watching a fiction. This watches balances instead.
+ *
+ * The wider risk surface the docs describe — strategy exposure, oracle status,
+ * collateral concentration — needs the strategy registry before it can be
+ * measured, and is deliberately absent rather than stubbed.
+ */
 export class RiskEngine {
   private prisma: PrismaClient;
   private emergencyMode = false;
+  private interval: ReturnType<typeof setInterval> | null = null;
 
   constructor(prisma: PrismaClient) {
     this.prisma = prisma;
   }
 
   async initialize(): Promise<void> {
-    console.log("[RiskEngine] Initializing...");
+    console.log("[RiskEngine] Initializing solvency watch...");
 
-    const eventBus = getEventBus();
-    await eventBus.subscribe(EventType.VALIDATOR_DOWN, async (data) => {
-      console.warn(`[RiskEngine] Validator down alert: ${data.pubkey}`);
-      await this.handleValidatorDown(data.pubkey, data.uptime);
-    });
+    await this.runSolvencyCheck().catch((err) =>
+      console.error("[RiskEngine] Initial solvency check failed:", err)
+    );
 
-    await eventBus.subscribe(EventType.REBALANCE_REQUIRED, async (data) => {
-      console.warn(`[RiskEngine] Rebalance required: ${data.reason}`);
-      await this.executeAutoReallocation(data.reason);
-    });
-
-    monitorInterval = setInterval(async () => {
+    this.interval = setInterval(async () => {
       try {
-        await this.runHealthCheck();
+        await this.runSolvencyCheck();
       } catch (err) {
-        console.error("[RiskEngine] Health check error:", err);
+        console.error("[RiskEngine] Solvency check error:", err);
       }
-    }, 60_000);
+    }, CHECK_INTERVAL_MS);
 
-    console.log("[RiskEngine] Initialized");
+    console.log(
+      `[RiskEngine] Initialized, checking every ${CHECK_INTERVAL_MS / 1000}s`
+    );
   }
 
   async shutdown(): Promise<void> {
-    if (monitorInterval) {
-      clearInterval(monitorInterval);
-      monitorInterval = null;
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
     }
     console.log("[RiskEngine] Shut down");
   }
 
-  private async runHealthCheck(): Promise<void> {
-    const validators = await this.prisma.validator.findMany();
-    if (validators.length === 0) return;
+  /**
+   * Compare what the vault holds against everything it owes.
+   *
+   * Share claims are `total_assets`, which the contract already derives net of
+   * queued withdrawals and accrued fees. A shortfall against the raw balance
+   * means the contract is promising XLM it does not hold.
+   */
+  private async runSolvencyCheck(): Promise<void> {
+    const [idle, pending, treasury, assets, supply, paused] = await Promise.all([
+      getIdleBalance(),
+      getPendingWithdrawals(),
+      getTreasuryBalance(),
+      getTotalStaked(),
+      getTotalSupply(),
+      getIsPaused(),
+    ]);
 
-    const downValidators = validators.filter(
-      (v) => v.uptime < config.protocol.validatorMinUptime
-    );
+    const liabilities = assets + pending + treasury;
+    const shortfall = liabilities - idle;
 
-    if (downValidators.length > validators.length * 0.3) {
+    if (shortfall > BigInt(0)) {
+      console.error(
+        `[RiskEngine] SOLVENCY SHORTFALL: holds ${fmt(idle)} XLM, owes ${fmt(liabilities)} XLM ` +
+          `(shares ${fmt(assets)}, queued ${fmt(pending)}, fees ${fmt(treasury)}) — short ${fmt(shortfall)} XLM`
+      );
+
       if (!this.emergencyMode) {
         this.emergencyMode = true;
-        console.error("[RiskEngine] EMERGENCY MODE ACTIVATED — >30% validators down");
-
-        // Pause protocol on-chain
-        try {
-          await callPause();
-          console.log("[RiskEngine] Protocol paused on-chain");
-        } catch (err) {
-          console.error("[RiskEngine] Failed to pause on-chain:", err);
-        }
-
-        const eventBus = getEventBus();
-        await eventBus.publish(EventType.REBALANCE_REQUIRED, {
-          reason: "emergency",
-          validators: downValidators.map((v) => ({
-            pubkey: v.pubkey,
-            currentAllocation: v.allocatedStake,
-            targetAllocation: BigInt(0),
-          })),
-          timestamp: Date.now(),
-        });
-
-        await this.sendGovernanceNotification(
-          "EMERGENCY",
-          `${downValidators.length}/${validators.length} validators down. Protocol paused. Emergency rebalance triggered.`
-        );
-      }
-    } else if (this.emergencyMode && downValidators.length === 0) {
-      this.emergencyMode = false;
-      console.log("[RiskEngine] Emergency mode deactivated — all validators healthy");
-
-      // Unpause protocol on-chain
-      try {
-        await callUnpause();
-        console.log("[RiskEngine] Protocol unpaused on-chain");
-      } catch (err) {
-        console.error("[RiskEngine] Failed to unpause on-chain:", err);
-      }
-
-      await this.sendGovernanceNotification(
-        "RECOVERY",
-        "All validators healthy. Protocol unpaused. Emergency mode deactivated."
-      );
-    }
-
-    // Check for individual slashing risk
-    for (const validator of downValidators) {
-      const hoursSinceCheck =
-        (Date.now() - validator.lastChecked.getTime()) / (1000 * 60 * 60);
-
-      if (hoursSinceCheck > 2 && validator.uptime < 0.9) {
-        console.warn(
-          `[RiskEngine] Slashing risk for ${validator.pubkey} — uptime ${(validator.uptime * 100).toFixed(1)}%, stale for ${hoursSinceCheck.toFixed(1)}h`
-        );
-
-        const eventBus = getEventBus();
-        await eventBus.publish(EventType.REBALANCE_REQUIRED, {
-          reason: "slashing_risk",
-          validators: [{
-            pubkey: validator.pubkey,
-            currentAllocation: validator.allocatedStake,
-            targetAllocation: BigInt(0),
-          }],
-          timestamp: Date.now(),
-        });
-      }
-    }
-
-    // Check for allocation deviation
-    await this.checkAllocationDeviation(validators);
-  }
-
-  /**
-   * Check if validator allocations deviate too far from their target (weighted by performance).
-   */
-  private async checkAllocationDeviation(
-    validators: Array<{
-      pubkey: string;
-      performanceScore: number;
-      allocatedStake: bigint;
-      uptime: number;
-    }>
-  ): Promise<void> {
-    const activeValidators = validators.filter(
-      (v) => v.uptime >= config.protocol.validatorMinUptime
-    );
-    if (activeValidators.length === 0) return;
-
-    const totalScore = activeValidators.reduce(
-      (sum, v) => sum + v.performanceScore,
-      0
-    );
-    const totalStake = activeValidators.reduce(
-      (sum, v) => sum + v.allocatedStake,
-      BigInt(0)
-    );
-
-    if (totalStake === BigInt(0) || totalScore === 0) return;
-
-    for (const v of activeValidators) {
-      const targetFraction = v.performanceScore / totalScore;
-      const actualFraction = Number(v.allocatedStake) / Number(totalStake);
-      const deviation = Math.abs(actualFraction - targetFraction);
-
-      if (deviation > config.protocol.rebalanceThreshold) {
-        console.log(
-          `[RiskEngine] Allocation deviation for ${v.pubkey}: actual=${(actualFraction * 100).toFixed(1)}% target=${(targetFraction * 100).toFixed(1)}%`
-        );
-
-        const eventBus = getEventBus();
-        await eventBus.publish(EventType.REBALANCE_REQUIRED, {
-          reason: "allocation_deviation",
-          validators: [{
-            pubkey: v.pubkey,
-            currentAllocation: v.allocatedStake,
-            targetAllocation: BigInt(Math.floor(Number(totalStake) * targetFraction)),
-          }],
-          timestamp: Date.now(),
-        });
-      }
-    }
-  }
-
-  /**
-   * Execute auto-reallocation: move stake from underperforming validators to healthy ones.
-   */
-  private async executeAutoReallocation(reason: string): Promise<void> {
-    console.log(`[RiskEngine] Executing auto-reallocation (reason: ${reason})...`);
-
-    const validators = await this.prisma.validator.findMany({
-      orderBy: { performanceScore: "desc" },
-    });
-
-    if (validators.length < 2) {
-      console.log("[RiskEngine] Not enough validators for reallocation");
-      return;
-    }
-
-    const healthy = validators.filter(
-      (v) => v.uptime >= config.protocol.validatorMinUptime
-    );
-    const unhealthy = validators.filter(
-      (v) => v.uptime < config.protocol.validatorMinUptime && v.allocatedStake > BigInt(0)
-    );
-
-    if (healthy.length === 0 || unhealthy.length === 0) {
-      console.log("[RiskEngine] No reallocation needed");
-      return;
-    }
-
-    // Calculate total stake to redistribute from unhealthy validators
-    const stakeToRedistribute = unhealthy.reduce(
-      (sum, v) => sum + v.allocatedStake,
-      BigInt(0)
-    );
-
-    if (stakeToRedistribute === BigInt(0)) return;
-
-    // Distribute proportionally to healthy validators by performance score
-    const totalHealthyScore = healthy.reduce(
-      (sum, v) => sum + v.performanceScore,
-      0
-    );
-
-    const plans: ReallocationPlan[] = [];
-
-    for (const target of healthy) {
-      const fraction = target.performanceScore / totalHealthyScore;
-      const allocation = BigInt(
-        Math.floor(Number(stakeToRedistribute) * fraction)
-      );
-
-      if (allocation > BigInt(0)) {
-        // Pick the first unhealthy validator with remaining stake
-        for (const source of unhealthy) {
-          if (source.allocatedStake > BigInt(0)) {
-            const moveAmount =
-              allocation < source.allocatedStake
-                ? allocation
-                : source.allocatedStake;
-
-            plans.push({
-              fromValidator: source.pubkey,
-              toValidator: target.pubkey,
-              amount: moveAmount,
-            });
-            break;
-          }
-        }
-      }
-    }
-
-    // Apply reallocation in DB (in production, this would also call contracts)
-    for (const plan of plans) {
-      console.log(
-        `[RiskEngine] Reallocating ${plan.amount} stroops: ${plan.fromValidator} → ${plan.toValidator}`
-      );
-
-      await this.prisma.validator.update({
-        where: { pubkey: plan.fromValidator },
-        data: {
-          allocatedStake: {
-            decrement: plan.amount,
-          },
-        },
-      });
-
-      await this.prisma.validator.update({
-        where: { pubkey: plan.toValidator },
-        data: {
-          allocatedStake: {
-            increment: plan.amount,
-          },
-        },
-      });
-    }
-
-    console.log(
-      `[RiskEngine] Auto-reallocation complete: ${plans.length} moves executed`
-    );
-
-    await this.sendGovernanceNotification(
-      "REBALANCE",
-      `Auto-reallocation executed: ${plans.length} stake moves (reason: ${reason})`
-    );
-  }
-
-  private async handleValidatorDown(
-    pubkey: string,
-    uptime: number
-  ): Promise<void> {
-    if (uptime < 0.85) {
-      console.error(
-        `[RiskEngine] Critical: validator ${pubkey} uptime ${(uptime * 100).toFixed(1)}% — triggering reallocation`
-      );
-
-      // Apply slashing on-chain: estimate 5% loss for severely down validators
-      const validator = await this.prisma.validator.findUnique({
-        where: { pubkey },
-      });
-      if (validator && validator.allocatedStake > BigInt(0)) {
-        const slashPercent = uptime < 0.5 ? 0.1 : 0.05; // 10% for <50% uptime, 5% otherwise
-        const slashAmount = BigInt(
-          Math.floor(Number(validator.allocatedStake) * slashPercent)
-        );
-
-        if (slashAmount > BigInt(0)) {
+        if (!paused) {
           try {
-            await callApplySlashing(slashAmount);
-            console.warn(
-              `[RiskEngine] Applied slashing: ${Number(slashAmount) / 1e7} XLM for validator ${pubkey}`
-            );
-
-            // Emit slashing event for withdrawal queue recalculation
-            const slashBus = getEventBus();
-            await slashBus.publish(EventType.SLASHING_APPLIED, {
-              amount: slashAmount,
-              reason: `validator_down:${pubkey}`,
-              timestamp: Date.now(),
-            });
-
-            await this.sendGovernanceNotification(
-              "SLASHING",
-              `Applied ${(slashPercent * 100).toFixed(0)}% slash (${(Number(slashAmount) / 1e7).toFixed(2)} XLM) for validator ${pubkey} (uptime: ${(uptime * 100).toFixed(1)}%)`
-            );
+            await callPause();
+            console.error("[RiskEngine] Protocol paused on solvency shortfall");
           } catch (err) {
-            console.error("[RiskEngine] On-chain slashing failed:", err);
+            console.error("[RiskEngine] Pause failed:", err);
           }
         }
+        await this.notify(
+          "SOLVENCY",
+          `Vault is short ${fmt(shortfall)} XLM against its obligations. Protocol paused.`
+        );
       }
-
-      const eventBus = getEventBus();
-      await eventBus.publish(EventType.REBALANCE_REQUIRED, {
-        reason: "validator_critical",
-        validators: [{
-          pubkey,
-          currentAllocation: BigInt(0),
-          targetAllocation: BigInt(0),
-        }],
-        timestamp: Date.now(),
-      });
+      return;
     }
+
+    if (this.emergencyMode) {
+      this.emergencyMode = false;
+      if (paused) {
+        try {
+          await callUnpause();
+          console.log("[RiskEngine] Solvency restored — protocol unpaused");
+        } catch (err) {
+          console.error("[RiskEngine] Unpause failed:", err);
+        }
+      }
+      await this.notify("SOLVENCY", "Vault is solvent again. Protocol unpaused.");
+    }
+
+    const rate = supply > BigInt(0) ? Number(assets) / Number(supply) : 1;
+    console.log(
+      `[RiskEngine] Solvent: holds ${fmt(idle)} XLM, owes ${fmt(liabilities)} XLM, rate ${rate.toFixed(7)}`
+    );
   }
 
-  /**
-   * Send notification to governance/monitoring webhooks.
-   */
-  private async sendGovernanceNotification(
-    level: string,
-    message: string
-  ): Promise<void> {
-    const payload = {
-      level,
-      message,
-      protocol: "sXLM",
-      timestamp: new Date().toISOString(),
-      emergencyMode: this.emergencyMode,
-    };
-
-    // Slack webhook
-    if (config.webhooks.slackUrl) {
-      try {
-        await fetch(config.webhooks.slackUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: `[sXLM ${level}] ${message}`,
-            blocks: [
-              {
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text: `*[sXLM Protocol — ${level}]*\n${message}\n_${payload.timestamp}_`,
-                },
-              },
-            ],
-          }),
-        });
-      } catch (err) {
-        console.error("[RiskEngine] Slack notification failed:", err);
-      }
+  private async notify(kind: string, message: string): Promise<void> {
+    const url = config.webhooks.governanceUrl;
+    if (!url) return;
+    try {
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, message, timestamp: Date.now() }),
+      });
+    } catch (err) {
+      console.warn("[RiskEngine] Notification failed:", err);
     }
-
-    // Generic governance webhook
-    if (config.webhooks.governanceUrl) {
-      try {
-        await fetch(config.webhooks.governanceUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      } catch (err) {
-        console.error("[RiskEngine] Governance webhook failed:", err);
-      }
-    }
-
-    console.log(`[RiskEngine] Notification sent: [${level}] ${message}`);
   }
 
   isEmergencyMode(): boolean {
     return this.emergencyMode;
   }
+}
+
+function fmt(stroops: bigint): string {
+  return (Number(stroops) / 1e7).toFixed(7);
 }

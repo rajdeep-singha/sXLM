@@ -24,6 +24,8 @@ pub enum DataKey {
     LpBalance(Address),
     ProtocolFeeBps,
     AccruedProtocolFees,
+    /// Vault address, used to sanity-check the ratio the pool is seeded at.
+    Vault,
 }
 
 // --- Storage helpers ---
@@ -103,6 +105,33 @@ fn isqrt(n: i128) -> i128 {
     x
 }
 
+/// How far the seeded ratio may sit from the vault rate, in basis points.
+const SEED_TOLERANCE_BPS: i128 = 200; // 2%
+
+/// Reject an opening deposit that prices sXLM far from what the vault says a
+/// share is worth. Skipped when no vault is configured, which is only the case
+/// for a pool deployed before this check existed and not yet migrated.
+fn require_seed_near_vault_rate(env: &Env, xlm_amount: i128, sxlm_amount: i128) {
+    let vault: Option<Address> = env.storage().instance().get(&DataKey::Vault);
+    let vault = match vault {
+        Some(v) => v,
+        None => return,
+    };
+
+    let rate = VaultRateClient::new(env, &vault).get_exchange_rate();
+    if rate <= 0 {
+        return;
+    }
+
+    // Price the pool would open at, scaled the same way as the vault rate.
+    let implied = xlm_amount * 10_000_000 / sxlm_amount;
+    let drift = if implied > rate { implied - rate } else { rate - implied };
+    assert!(
+        drift * 10_000 <= rate * SEED_TOLERANCE_BPS,
+        "seed ratio too far from the vault exchange rate"
+    );
+}
+
 #[contract]
 pub struct LpPoolContract;
 
@@ -115,6 +144,7 @@ impl LpPoolContract {
         sxlm_token: Address,
         native_token: Address,
         fee_bps: u32,
+        vault: Address,
     ) {
         let already: bool = env.storage().instance().get(&DataKey::Initialized).unwrap_or(false);
         if already {
@@ -125,6 +155,7 @@ impl LpPoolContract {
         env.storage().instance().set(&DataKey::SxlmToken, &sxlm_token);
         env.storage().instance().set(&DataKey::NativeToken, &native_token);
         env.storage().instance().set(&DataKey::FeeBps, &(fee_bps as i128));
+        env.storage().instance().set(&DataKey::Vault, &vault);
         write_i128(&env, &DataKey::ProtocolFeeBps, 5); // 0.05% of swap input
         write_i128(&env, &DataKey::AccruedProtocolFees, 0);
         extend_instance(&env);
@@ -135,6 +166,23 @@ impl LpPoolContract {
         let admin = read_admin(&env);
         admin.require_auth();
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
+    /// Point the pool at the vault, once. Only needed to migrate a pool
+    /// deployed before the seed-ratio check existed.
+    pub fn set_vault(env: Env, vault: Address) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+        if env.storage().instance().has(&DataKey::Vault) {
+            panic!("vault already set");
+        }
+        extend_instance(&env);
+        env.storage().instance().set(&DataKey::Vault, &vault);
+    }
+
+    pub fn vault(env: Env) -> Address {
+        extend_instance(&env);
+        env.storage().instance().get(&DataKey::Vault).expect("vault not configured")
     }
 
     /// Bump instance TTL — can be called by anyone to keep contract alive.
@@ -155,7 +203,11 @@ impl LpPoolContract {
 
         // Calculate actual amounts and LP tokens
         let (actual_xlm, actual_sxlm, lp_minted) = if total_lp == 0 {
-            // First deposit: use both amounts as-is
+            // First deposit sets the price for everyone who follows. sXLM is a
+            // claim on the vault, so its fair price is the vault exchange rate
+            // — not 1:1. Seeding at parity when a share is worth more than one
+            // XLM simply hands the difference to the first arbitrageur.
+            require_seed_near_vault_rate(&env, xlm_amount, sxlm_amount);
             (xlm_amount, sxlm_amount, isqrt(xlm_amount * sxlm_amount))
         } else {
             // Proportional: use the limiting side, compute the other
@@ -396,13 +448,39 @@ impl LpPoolContract {
     }
 }
 
+use soroban_sdk::contractclient;
+
+#[contractclient(name = "VaultRateClient")]
+pub trait VaultRateInterface {
+    fn get_exchange_rate(env: Env) -> i128;
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{token::StellarAssetClient, Env};
+    use soroban_sdk::{symbol_short, token::StellarAssetClient, Env};
+
+    /// Vault stand-in exposing only the rate the seed check reads.
+    #[contract]
+    pub struct MockVault;
+
+    #[contractimpl]
+    impl MockVault {
+        pub fn set_rate(env: Env, rate: i128) {
+            env.storage().instance().set(&symbol_short!("RATE"), &rate);
+        }
+        pub fn get_exchange_rate(env: Env) -> i128 {
+            env.storage().instance().get(&symbol_short!("RATE")).unwrap_or(10_000_000)
+        }
+    }
 
     fn setup_test() -> (Env, Address, Address, Address, Address, Address) {
+        let (env, id, sx, na, u, ad, _v) = setup_with_vault();
+        (env, id, sx, na, u, ad)
+    }
+
+    fn setup_with_vault() -> (Env, Address, Address, Address, Address, Address, Address) {
         let env = Env::default();
         env.mock_all_auths();
 
@@ -413,14 +491,15 @@ mod test {
         let native_id = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
 
         let contract_id = env.register_contract(None, LpPoolContract);
+        let vault_id = env.register_contract(None, MockVault);
         let client = LpPoolContractClient::new(&env, &contract_id);
-        client.initialize(&admin, &sxlm_id, &native_id, &30);
+        client.initialize(&admin, &sxlm_id, &native_id, &30, &vault_id);
 
         // Mint tokens to user
         StellarAssetClient::new(&env, &sxlm_id).mint(&user, &1_000_000_0000000);
         StellarAssetClient::new(&env, &native_id).mint(&user, &1_000_000_0000000);
 
-        (env, contract_id, sxlm_id, native_id, user, admin)
+        (env, contract_id, sxlm_id, native_id, user, admin, vault_id)
     }
 
     #[test]
@@ -492,6 +571,31 @@ mod test {
         assert!(xlm_out < 1_000_0000000);
     }
 
+    /// Opening the pool at parity when a share is worth more than one XLM
+    /// hands the gap to whoever arbitrages it first.
+    #[test]
+    #[should_panic(expected = "seed ratio too far from the vault exchange rate")]
+    fn seeding_far_from_the_vault_rate_is_refused() {
+        let (env, contract_id, _, _, user, _, vault_id) = setup_with_vault();
+        MockVaultClient::new(&env, &vault_id).set_rate(&20_320_044);
+
+        // 1:1, while the vault says a share is worth 2.032 XLM.
+        LpPoolContractClient::new(&env, &contract_id)
+            .add_liquidity(&user, &10_000_0000000, &10_000_0000000);
+    }
+
+    #[test]
+    fn seeding_at_the_vault_rate_is_accepted() {
+        let (env, contract_id, _, _, user, _, vault_id) = setup_with_vault();
+        MockVaultClient::new(&env, &vault_id).set_rate(&20_320_044);
+
+        let client = LpPoolContractClient::new(&env, &contract_id);
+        // 20,320 XLM against 10,000 sXLM ≈ the vault rate.
+        let lp = client.add_liquidity(&user, &20_320_0440000, &10_000_0000000);
+        assert!(lp > 0);
+        assert_eq!(client.vault(), vault_id);
+    }
+
     #[test]
     fn test_get_price() {
         let (env, contract_id, _, _, user, _) = setup_test();
@@ -500,7 +604,9 @@ mod test {
         client.add_liquidity(&user, &100_000_0000000, &100_000_0000000);
 
         let price = client.get_price();
-        assert_eq!(price, 10_000_000); // 1:1
+        // 1:1 only because this pool was seeded 1:1 against a vault still at
+        // parity. It is not a peg — see seeding_far_from_the_vault_rate_is_refused.
+        assert_eq!(price, 10_000_000);
     }
 
     #[test]

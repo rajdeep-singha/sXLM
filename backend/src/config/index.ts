@@ -90,7 +90,6 @@ export const config = {
     minStakeAmount: BigInt(10_000_000), // 1 XLM in stroops
     maxStakeAmount: BigInt(100_000_000_000_000), // 10M XLM in stroops
     rebalanceThreshold: 0.1, // 10% deviation triggers rebalance
-    validatorMinUptime: 0.95, // 95%
     exchangeRateRefreshIntervalMs: 60_000, // 1 minute
     rewardSnapshotIntervalMs: 5 * 60_000, // 5 minutes
     withdrawalPollIntervalMs: 30_000, // 30 seconds

@@ -12,7 +12,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { PrismaClient } from "@prisma/client";
 import { config } from "../../config/index.js";
-import { StakingEngine } from "../../staking-engine/index.js";
+import { StakingEngine } from "../../vault-engine/index.js";
 
 const unstakeSchema = z.object({
   userAddress: z.string().min(56).max(56),

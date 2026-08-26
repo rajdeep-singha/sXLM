@@ -12,11 +12,8 @@ const NAV_LINKS = [
 ];
 
 const MORE_LINKS = [
-  { path: '/analytics',  label: 'Analytics'  },
-  { path: '/validators', label: 'Validators' },
-  { path: '/liquidity',  label: 'Liquidity'  },
-  { path: '/leverage',   label: 'Leverage'   },
-  { path: '/restaking',  label: 'Restaking'  },
+  { path: '/analytics', label: 'Analytics' },
+  { path: '/liquidity', label: 'Liquidity' },
 ];
 
 export default function Navbar() {

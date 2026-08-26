@@ -6,6 +6,16 @@ const BPS_DENOMINATOR: i128 = 10_000;
 const RATE_PRECISION: i128 = 10_000_000; // 1e7
 const DEFAULT_LIQUIDATION_BONUS_BPS: i128 = 500; // 5% bonus
 
+/// Ceiling on how much of the lending reserve may be lent out at once.
+///
+/// Redepositing borrowed XLM as fresh collateral and borrowing again inflates
+/// reported TVL out of the same capital. Note that total borrowed over total
+/// collateral converges on the collateral factor either way, so that ratio
+/// cannot tell recursion apart from ordinary borrowing. What each loop does
+/// need is more XLM out of the reserve — so capping reserve utilisation is what
+/// actually bounds it, and it keeps exit liquidity in the pool.
+const DEFAULT_MAX_UTILIZATION_BPS: i128 = 9000; // 90% of the reserve
+
 // ---------- TTL constants ----------
 // Testnet: ~5s per ledger
 // 30 days  ≈  518_400 ledgers
@@ -25,7 +35,12 @@ pub enum DataKey {
     LiquidationThresholdBps,
     BorrowRateBps,
     LiquidationBonusBps,
-    ExchangeRate, // sXLM → XLM rate (scaled by RATE_PRECISION)
+    /// Ceiling on total borrowing as a share of total collateral value.
+    MaxUtilizationBps,
+    /// Address of the vault contract. The sXLM price is read from it rather
+    /// than stored here, so no admin can set the number this contract values
+    /// collateral at.
+    Vault,
     Initialized,
     TotalCollateral,
     TotalBorrowed,
@@ -90,6 +105,13 @@ fn read_liquidation_threshold(env: &Env) -> i128 {
         .unwrap_or(8000) // 80% default
 }
 
+fn read_max_utilization(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MaxUtilizationBps)
+        .unwrap_or(DEFAULT_MAX_UTILIZATION_BPS)
+}
+
 fn read_liquidation_bonus(env: &Env) -> i128 {
     env.storage()
         .instance()
@@ -97,11 +119,22 @@ fn read_liquidation_bonus(env: &Env) -> i128 {
         .unwrap_or(DEFAULT_LIQUIDATION_BONUS_BPS)
 }
 
+fn read_vault(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::Vault)
+}
+
+/// sXLM → XLM rate, computed by the vault from its assets and share supply.
+///
+/// This is a cross-contract read on purpose. The previous build stored the rate
+/// and let the admin write it, which meant collateral could be revalued at will
+/// — borrow against an inflated number, or liquidate against a deflated one.
+/// Falls back to 1:1 only while no vault is configured, which is the state a
+/// pre-upgrade contract is in until `set_vault` is called once.
 fn read_exchange_rate(env: &Env) -> i128 {
-    env.storage()
-        .instance()
-        .get(&DataKey::ExchangeRate)
-        .unwrap_or(RATE_PRECISION) // 1:1 default
+    match read_vault(env) {
+        Some(vault) => VaultClient::new(env, &vault).get_exchange_rate(),
+        None => RATE_PRECISION,
+    }
 }
 
 fn read_user_collateral(env: &Env, user: &Address) -> i128 {
@@ -167,6 +200,7 @@ impl LendingContract {
         collateral_factor_bps: u32,
         liquidation_threshold_bps: u32,
         borrow_rate_bps: u32,
+        vault: Address,
     ) {
         let already: bool = env.storage().instance().get(&DataKey::Initialized).unwrap_or(false);
         if already {
@@ -180,7 +214,8 @@ impl LendingContract {
         env.storage().instance().set(&DataKey::LiquidationThresholdBps, &(liquidation_threshold_bps as i128));
         env.storage().instance().set(&DataKey::BorrowRateBps, &(borrow_rate_bps as i128));
         env.storage().instance().set(&DataKey::LiquidationBonusBps, &DEFAULT_LIQUIDATION_BONUS_BPS);
-        env.storage().instance().set(&DataKey::ExchangeRate, &RATE_PRECISION); // 1:1 initial
+        env.storage().instance().set(&DataKey::MaxUtilizationBps, &DEFAULT_MAX_UTILIZATION_BPS);
+        env.storage().instance().set(&DataKey::Vault, &vault);
         extend_instance(&env);
     }
 
@@ -200,18 +235,40 @@ impl LendingContract {
     // Admin setters (for governance)
     // ==========================================================
 
-    /// Update the sXLM → XLM exchange rate. Only callable by admin.
-    pub fn update_exchange_rate(env: Env, rate: i128) {
+    /// Point this contract at the vault, once.
+    ///
+    /// Needed only to migrate a contract deployed before the rate was read
+    /// cross-contract. It can be set exactly once: naming the source is a
+    /// different power from setting the price, and freezing it after the first
+    /// write keeps an admin from later swapping in a vault that lies.
+    pub fn set_vault(env: Env, vault: Address) {
         let admin = read_admin(&env);
         admin.require_auth();
-        assert!(rate > 0, "rate must be positive");
+        if env.storage().instance().has(&DataKey::Vault) {
+            panic!("vault already set");
+        }
         extend_instance(&env);
-        env.storage().instance().set(&DataKey::ExchangeRate, &rate);
+        env.storage().instance().set(&DataKey::Vault, &vault);
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("er_upd"),),
-            rate,
+            (soroban_sdk::symbol_short!("vault_set"),),
+            vault,
         );
+    }
+
+    /// Update the recursion cap. Only callable by admin.
+    pub fn update_max_utilization(env: Env, new_bps: u32) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+        assert!(new_bps > 0 && new_bps <= 10000, "invalid utilization cap");
+        extend_instance(&env);
+        env.storage().instance().set(&DataKey::MaxUtilizationBps, &(new_bps as i128));
+        env.events().publish((soroban_sdk::symbol_short!("util_upd"),), new_bps);
+    }
+
+    pub fn get_max_utilization(env: Env) -> i128 {
+        extend_instance(&env);
+        read_max_utilization(&env)
     }
 
     /// Update the collateral factor. Only callable by admin.
@@ -321,10 +378,11 @@ impl LendingContract {
         let max_borrow = collateral * er * cf_bps / (BPS_DENOMINATOR * RATE_PRECISION);
         assert!(new_borrowed <= max_borrow, "borrow exceeds collateral limit");
 
-        write_user_borrowed(&env, &user, new_borrowed);
-
         let total = read_i128(&env, &DataKey::TotalBorrowed);
-        write_i128(&env, &DataKey::TotalBorrowed, total + xlm_amount);
+        let new_total = total + xlm_amount;
+
+        write_user_borrowed(&env, &user, new_borrowed);
+        write_i128(&env, &DataKey::TotalBorrowed, new_total);
 
         let native = read_native_token(&env);
         let native_client = token::Client::new(&env, &native);
@@ -332,6 +390,16 @@ impl LendingContract {
         // Solvency check: ensure the pool has enough XLM to lend
         let pool_balance = native_client.balance(&env.current_contract_address());
         assert!(pool_balance >= xlm_amount, "insufficient pool liquidity");
+
+        // Reserve utilisation cap. Each turn of a recursive leverage loop has to
+        // draw more XLM out of the reserve, so this is the constraint that
+        // bounds it — and it leaves liquidity for lenders to exit.
+        let reserve_after = pool_balance - xlm_amount;
+        let max_utilization = read_max_utilization(&env);
+        assert!(
+            new_total * BPS_DENOMINATOR <= (reserve_after + new_total) * max_utilization,
+            "reserve utilization cap reached"
+        );
 
         native_client.transfer(&env.current_contract_address(), &user, &xlm_amount);
 
@@ -455,6 +523,11 @@ impl LendingContract {
         read_exchange_rate(&env)
     }
 
+    pub fn vault(env: Env) -> Address {
+        extend_instance(&env);
+        read_vault(&env).expect("vault not configured")
+    }
+
     pub fn get_collateral_factor(env: Env) -> i128 {
         extend_instance(&env);
         read_collateral_factor(&env)
@@ -483,13 +556,43 @@ impl LendingContract {
     }
 }
 
+use soroban_sdk::contractclient;
+
+#[contractclient(name = "VaultClient")]
+pub trait VaultInterface {
+    fn get_exchange_rate(env: Env) -> i128;
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{token::StellarAssetClient, Env};
+    use soroban_sdk::{symbol_short, token::StellarAssetClient, Env};
+
+    /// Stand-in for the vault. Only exposes the rate, and lets a test move it
+    /// the way real deposits and yield would, rather than by admin decree.
+    #[contract]
+    pub struct MockVault;
+
+    #[contractimpl]
+    impl MockVault {
+        pub fn set_rate(env: Env, rate: i128) {
+            env.storage().instance().set(&symbol_short!("RATE"), &rate);
+        }
+        pub fn get_exchange_rate(env: Env) -> i128 {
+            env.storage()
+                .instance()
+                .get(&symbol_short!("RATE"))
+                .unwrap_or(RATE_PRECISION)
+        }
+    }
 
     fn setup_test() -> (Env, Address, Address, Address, Address, Address, Address) {
+        let (env, contract_id, sxlm, native, user, liq, admin, _vault) = setup_with_vault();
+        (env, contract_id, sxlm, native, user, liq, admin)
+    }
+
+    fn setup_with_vault() -> (Env, Address, Address, Address, Address, Address, Address, Address) {
         let env = Env::default();
         env.mock_all_auths();
 
@@ -502,10 +605,11 @@ mod test {
         let native_id = env.register_stellar_asset_contract_v2(admin.clone()).address();
 
         let contract_id = env.register_contract(None, LendingContract);
+        let vault_id = env.register_contract(None, MockVault);
 
         // Initialize
         let client = LendingContractClient::new(&env, &contract_id);
-        client.initialize(&admin, &sxlm_id, &native_id, &7000, &8000, &500);
+        client.initialize(&admin, &sxlm_id, &native_id, &7000, &8000, &500, &vault_id);
 
         // Mint tokens
         let sxlm_admin_client = StellarAssetClient::new(&env, &sxlm_id);
@@ -516,7 +620,7 @@ mod test {
         native_admin_client.mint(&contract_id, &500_000_0000000); // Fund pool with XLM
         native_admin_client.mint(&liquidator, &100_000_0000000);
 
-        (env, contract_id, sxlm_id, native_id, user, liquidator, admin)
+        (env, contract_id, sxlm_id, native_id, user, liquidator, admin, vault_id)
     }
 
     #[test]
@@ -616,14 +720,15 @@ mod test {
 
     #[test]
     fn test_health_factor_with_exchange_rate() {
-        let (env, contract_id, _, _, user, _, _) = setup_test();
+        let (env, contract_id, _, _, user, _, _, vault_id) = setup_with_vault();
+        let vault = MockVaultClient::new(&env, &vault_id);
         let client = LendingContractClient::new(&env, &contract_id);
 
         client.deposit_collateral(&user, &10_000_000_000);
         client.borrow(&user, &5_000_000_000);
 
         // Increase ER to 1.2 (12_000_000)
-        client.update_exchange_rate(&12_000_000);
+        vault.set_rate(&12_000_000);
 
         // HF now uses LT (8000) not CF (7000)
         // HF = (10000 * 12_000_000 * 8000 / 10000) / 5000
@@ -634,7 +739,8 @@ mod test {
 
     #[test]
     fn test_exchange_rate_increases_borrow_capacity() {
-        let (env, contract_id, _, _, user, _, _) = setup_test();
+        let (env, contract_id, _, _, user, _, _, vault_id) = setup_with_vault();
+        let vault = MockVaultClient::new(&env, &vault_id);
         let client = LendingContractClient::new(&env, &contract_id);
 
         client.deposit_collateral(&user, &10_000_000_000); // 1000 sXLM
@@ -643,12 +749,68 @@ mod test {
         client.borrow(&user, &7_000_000_000);
 
         // Increase ER to 1.5 → max borrow = 1000 * 1.5 * 0.7 = 1050 XLM
-        client.update_exchange_rate(&15_000_000);
+        vault.set_rate(&15_000_000);
 
         // Can now borrow more (up to 1050 - 700 = 350 more)
         client.borrow(&user, &3_000_000_000); // borrow 300 more
         let (_, bor) = client.get_position(&user);
         assert_eq!(bor, 10_000_000_000); // 700 + 300 = 1000 total
+    }
+
+    /// The rate this contract values collateral at follows the vault and
+    /// nothing else. There is no entrypoint that writes it.
+    #[test]
+    fn lending_rate_tracks_the_vault() {
+        let (env, contract_id, _, _, _, _, _, vault_id) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        let vault = MockVaultClient::new(&env, &vault_id);
+
+        assert_eq!(client.get_exchange_rate(), RATE_PRECISION);
+        assert_eq!(client.vault(), vault_id);
+
+        vault.set_rate(&19_712_978);
+        assert_eq!(client.get_exchange_rate(), 19_712_978);
+    }
+
+    #[test]
+    #[should_panic(expected = "vault already set")]
+    fn set_vault_is_one_shot() {
+        let (env, contract_id, _, _, _, _, _, _) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        // Migration helper for pre-upgrade deployments; must not become a way
+        // to repoint a live market at a vault that reports whatever suits.
+        client.set_vault(&Address::generate(&env));
+    }
+
+    #[test]
+    fn recursion_is_bounded_by_reserve_utilization() {
+        let (env, contract_id, sxlm_id, native_id, user, _, _, _) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        client.update_max_utilization(&9000);
+
+        // Drain the reserve down to a size the cap can actually bite on.
+        let reserve = 1_000_0000000i128;
+        let contract_native = token::Client::new(&env, &native_id)
+            .balance(&contract_id);
+        // Move the surplus out so only `reserve` remains lendable.
+        env.as_contract(&contract_id, || {
+            token::Client::new(&env, &native_id).transfer(
+                &contract_id,
+                &Address::generate(&env),
+                &(contract_native - reserve),
+            );
+        });
+
+        StellarAssetClient::new(&env, &sxlm_id).mint(&user, &1_000_000_0000000);
+        client.deposit_collateral(&user, &100_000_0000000);
+
+        // 90% of a 1,000 XLM reserve is 900. Asking for 950 must fail.
+        let r = client.try_borrow(&user, &950_0000000);
+        assert!(r.is_err(), "utilization cap did not bind");
+
+        // 800 sits under the cap and goes through.
+        client.borrow(&user, &800_0000000);
+        assert_eq!(client.total_borrowed(), 800_0000000);
     }
 
     #[test]
@@ -660,7 +822,8 @@ mod test {
         let client2 = LendingContractClient::new(&env, &contract2);
         let sxlm2 = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
         let native2 = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
-        client2.initialize(&Address::generate(&env), &sxlm2, &native2, &7000, &5000, &500);
+        let vault2 = env.register_contract(None, MockVault);
+        client2.initialize(&Address::generate(&env), &sxlm2, &native2, &7000, &5000, &500, &vault2);
 
         let u = Address::generate(&env);
         let liq = Address::generate(&env);

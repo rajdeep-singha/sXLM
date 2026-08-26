@@ -1342,7 +1342,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sxlm-staking"
+name = "sxlm-token"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
@@ -1350,7 +1350,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sxlm-token"
+name = "sxlm-vault"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",

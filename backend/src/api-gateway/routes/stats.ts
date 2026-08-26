@@ -1,6 +1,6 @@
 import { FastifyPluginAsync } from "fastify";
 import { PrismaClient } from "@prisma/client";
-import { StakingEngine } from "../../staking-engine/index.js";
+import { StakingEngine } from "../../vault-engine/index.js";
 
 export const statsRoutes: FastifyPluginAsync<{
   prisma: PrismaClient;
@@ -72,12 +72,10 @@ export const statsRoutes: FastifyPluginAsync<{
       exchangeRate,
       tvlUsd: metrics?.tvlUsd ?? 0,
       totalStakers: 0,
-      totalValidators: 0,
       xlmPrice: metrics?.tvlUsd && totalStakedXlm > 0
         ? metrics.tvlUsd / totalStakedXlm
         : 0.12,
       liquidityBuffer: protocolStats ? Number(protocolStats.liquidityBuffer) / 1e7 : 0,
-      avgValidatorScore: metrics?.avgValidatorScore ?? 0,
       treasuryBalance: protocolStats ? Number(protocolStats.treasuryBalance) / 1e7 : 0,
       isPaused: protocolStats?.isPaused ?? false,
       protocolFeePct: protocolStats ? protocolStats.protocolFeeBps / 100 : 10,

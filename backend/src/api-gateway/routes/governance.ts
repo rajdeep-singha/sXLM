@@ -17,7 +17,7 @@ import {
   callUpdateBorrowRate,
   callUpdateLiquidationThreshold,
   callSetLpProtocolFeeBps,
-} from "../../staking-engine/contractClient.js";
+} from "../../vault-engine/contractClient.js";
 
 const createProposalSchema = z.object({
   userAddress: z.string().min(56).max(56),
@@ -29,6 +29,9 @@ const voteSchema = z.object({
   userAddress: z.string().min(56).max(56),
   proposalId: z.number().int().min(0),
   support: z.boolean(),
+  // sXLM to escrow for the vote, in whole sXLM. Weight equals the amount
+  // locked; it is returned once voting closes.
+  amount: z.number().positive(),
 });
 
 const executeSchema = z.object({
@@ -212,9 +215,13 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
         [new Address(body.userAddress).toScVal()]
       );
       const sxlmBalance = BigInt(sxlmRaw ?? 0);
-      if (sxlmBalance <= BigInt(0)) {
+      const voteStroops = BigInt(Math.floor(body.amount * 1e7));
+      if (sxlmBalance < voteStroops) {
         return reply.status(400).send({
-          error: "You have no sXLM to vote with. Stake XLM first to receive sXLM, then vote.",
+          error:
+            `Voting escrows sXLM until the vote closes. You hold ${
+              Number(sxlmBalance) / 1e7
+            } sXLM but tried to vote with ${body.amount}.`,
         });
       }
 
@@ -226,6 +233,7 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
           new Address(body.userAddress).toScVal(),
           nativeToScVal(BigInt(body.proposalId), { type: "u64" }),
           nativeToScVal(body.support, { type: "bool" }),
+          nativeToScVal(voteStroops, { type: "i128" }),
         ],
         body.userAddress
       );

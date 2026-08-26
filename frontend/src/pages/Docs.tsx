@@ -41,7 +41,7 @@ const SIDEBAR_GROUPS: SidebarGroup[] = [
     items: [
       { id: 'risk-management', title: 'Risk Management' },
       { id: 'liquidity-model', title: 'Liquidity Model' },
-      { id: 'insurance-fund', title: 'Insurance Fund' },
+      { id: 'current-limits', title: 'Current Limits' },
       { id: 'audit-plan', title: 'Audit Plan' },
     ],
   },
@@ -202,7 +202,7 @@ function DocContent() {
             </thead>
             <tbody>
               {[
-                { name: 'sxlm-token', addr: 'CAS3...OWMA', desc: 'Vault share token — share accounting, minting, burning' },
+                { name: 'sxlm-token', addr: 'CCGF...O7FJ', desc: 'Vault share token — share accounting, minting, burning' },
                 { name: 'vault', addr: 'CDYX...45PS', desc: 'Primary entry point — receives XLM, routes to strategies' },
                 { name: 'lending', addr: 'CAOW...QNJG', desc: 'Overcollateralized borrowing and lending engine' },
                 { name: 'lp-pool', addr: 'CAW2...VLHV', desc: 'AMM for XLM/sXLM liquidity' },
@@ -227,7 +227,7 @@ function DocContent() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-4">
           {[
             { name: 'Risk Engine', desc: 'Continuously evaluates collateralization, liquidity depth, strategy exposure, oracle status, and withdrawal pressure.' },
-            { name: 'Strategy Allocation Engine', desc: 'Proposes rebalances across approved strategies within governance-approved allocation caps.' },
+            { name: 'Solvency Watch', desc: 'Compares what the vault holds against share claims, queued withdrawals and accrued fees, and pauses the protocol on a shortfall.' },
             { name: 'Keeper Service', desc: 'Executes keeper tasks with limited permissions — cannot arbitrarily move user funds.' },
             { name: 'Event Bus', desc: 'Processes on-chain events from Stellar Horizon for real-time analytics and state indexing.' },
           ].map((s) => (
@@ -285,18 +285,22 @@ function DocContent() {
           Oracles are used only for external asset pricing, collateral valuation, and liquidation logic.
         </P>
 
-        <H3 id="wad-ray">Fixed-Point Arithmetic (Wad/Ray)</H3>
+        <H3 id="precision">Fixed-Point Arithmetic</H3>
         <P>
-          The Soroban WebAssembly runtime lacks native floating-point arithmetic. To prevent truncation errors compounding across millions of transactions,
-          StelloFi implements fixed-point arithmetic using Wad and Ray scaling mechanics:
+          The Soroban WebAssembly runtime has no floating-point arithmetic, so every rate is an integer.
+          StelloFi scales by <Code>1e7</Code> and computes in Soroban's native <Code>i128</Code>.
         </P>
         <Formula>
-          {'Wad = 10^18  (standard precision)'}
+          {'RATE_PRECISION = 10_000_000  (1e7)'}
           <br />
-          {'Ray = 10^27  (high-precision temporal indexing)'}
-          <br />
-          {'All calculations use Soroban native i128 (128-bit integer) to prevent overflow.'}
+          {'All arithmetic in i128.'}
         </Formula>
+        <P>
+          1e7 is chosen because it is exactly the precision of a stroop, the smallest unit of XLM.
+          A wider scale — 1e18, 1e27 — would carry digits that cannot correspond to any amount the vault
+          is able to hold or pay out, which reads as precision the protocol does not actually have.
+          Division floors, and it floors against the depositor rather than the pool.
+        </P>
       </section>
 
       <div className="border-t border-[#e5e5e5] my-12" />
@@ -360,21 +364,31 @@ function DocContent() {
         <p className="text-sm text-black/50 mb-2">Protocol</p>
         <H2 id="vault-h">Vault Contract</H2>
         <P>
-          The <Code>vault</Code> contract is the primary entry point for user interaction. It receives native XLM deposits,
-          triggers sXLM minting, custodies the liquidity buffer, and routes capital only to governance-approved strategies within allocation caps.
+          The <Code>vault</Code> contract is the entry point. It receives XLM deposits, mints and burns sXLM shares,
+          and holds the pooled XLM. Share accounting follows the standard vault model: shares are minted at
+          <Code>assets × supply / total_assets</Code> and burned symmetrically, with division floored toward the pool.
         </P>
         <P>
-          Strategy allocation is governed by deterministic risk constraints. Each strategy receives an allocation cap based on
-          smart contract risk, liquidity risk, oracle risk, historical utilization, withdrawal delay, counterparty exposure,
-          audit status, and maximum loss estimate.
+          <strong className="text-black font-medium">Assets are derived, not stored.</strong> <Code>total_assets()</Code> is computed on
+          every read as idle XLM balance, plus anything deployed to a strategy, minus withdrawals that are already
+          owed and protocol fees that have accrued. There is no stored balance an admin could set, and no path that
+          raises the exchange rate without XLM arriving first.
         </P>
         <Formula>
-          {'Each strategy i has allocation weight w_i'}
+          {'total_assets = idle_balance + deployed - pending_withdrawals - treasury'}
           <br />
-          {'Keeper may rebalance only within governance-approved caps'}
-          <br />
-          {'Breaching strategy limits requires multisig governance approval'}
+          {'E(t) = total_assets / total_shares'}
         </Formula>
+        <P>
+          The first deposit permanently locks 1,000 shares to the contract itself, so the share price can never be
+          set by donating to an empty vault.
+        </P>
+        <P>
+          <strong className="text-black font-medium">No strategy allocation exists yet.</strong> The <Code>deployed</Code> term is
+          present in the accounting so it never has to be redefined, and is currently always zero — the vault holds
+          idle XLM. Because everything is liquid, the withdrawal queue is unreachable today: every exit pays out
+          immediately.
+        </P>
       </section>
 
       <div className="border-t border-[#e5e5e5] my-12" />
@@ -390,6 +404,7 @@ function DocContent() {
             { name: 'Base LTV', desc: 'Maximum borrowing power granted per unit of collateral.' },
             { name: 'Liquidation Threshold', desc: 'Point at which a position is flagged as undercollateralized and subject to liquidation.' },
             { name: 'Liquidation Penalty', desc: 'Fee extracted during liquidation to incentivize liquidators or keeper services.' },
+            { name: 'Reserve Utilisation Cap', desc: 'Ceiling on how much of the reserve can be lent at once. Bounds recursive leverage and preserves exit liquidity.' },
           ].map((p) => (
             <div key={p.name} className="bg-[#F5F5F5] rounded-xl p-4 border border-[#e5e5e5]">
               <p className="font-medium text-black text-sm mb-1">{p.name}</p>
@@ -403,9 +418,12 @@ function DocContent() {
           {'HF < 1.0 → position eligible for liquidation'}
         </Formula>
         <P>
-          Recursive leverage using sXLM as collateral is treated as a user-level leveraged position,
-          not protocol-level organic yield. The protocol caps recursive exposure and applies conservative LTVs
-          to prevent circular accounting where borrowed XLM is redeposited to inflate TVL or displayed APY.
+          Recursive leverage using sXLM as collateral is a user-level position, not protocol yield. Borrowed XLM can
+          be staked, redeposited as collateral and borrowed against again, compounding reported TVL out of the same
+          capital. Note that this cannot be caught by watching total borrowed against total collateral — that ratio
+          converges on the collateral factor whether or not anyone is looping. What each turn of the loop does need is
+          more XLM out of the reserve, so the reserve utilisation cap is what bounds it, and it keeps exit liquidity
+          available at the same time.
         </P>
       </section>
 
@@ -420,9 +438,10 @@ function DocContent() {
           its fair value is determined by the current exchange rate <Code>E(t)</Code>.
         </P>
         <P>
-          If 1 sXLM is redeemable for 1.03 XLM, the pool treats 1.03 XLM as the reference price, not 1.00 XLM.
-          Any stable-swap or concentrated-liquidity design must account for this drifting exchange rate,
-          otherwise arbitrageurs may extract value from LPs or the pool may misprice sXLM during yield accrual.
+          If 1 sXLM is redeemable for 1.03 XLM, the fair reference price is 1.03 XLM, not 1.00. Because the first
+          deposit into an empty pool sets the price for everyone who follows, the contract reads the vault rate and
+          <strong className="text-black font-medium">refuses an opening deposit that prices sXLM more than 2% away from it</strong> —
+          seeding at parity when a share is worth more simply hands the difference to the first arbitrageur.
         </P>
       </section>
 
@@ -450,20 +469,22 @@ function DocContent() {
         <p className="text-sm text-black/50 mb-2">Risk & Security</p>
         <H2 id="risk-h">Risk Management</H2>
         <P>
-          StelloFi does not face validator slashing — Stellar has no native staking yield or validator slashing mechanism.
-          The relevant vault risks are strategy loss, bad debt, oracle failure, exploit loss, and liquidity shortfall.
+          StelloFi does not face validator slashing — Stellar has no native staking yield and no validator slashing
+          mechanism. With no strategy deployed, the vault is also not exposed to strategy loss today. What remains
+          is the accounting itself and the lending market.
         </P>
         <P>
-          If an integrated strategy suffers an irrecoverable loss <Code>L_event</Code>, total XLM-equivalent vault assets are reduced.
-          Because total shares remain unchanged, the vault exchange rate <Code>E(t)</Code> decreases and the loss is reflected
-          transparently in assets per share.
+          The invariant the protocol commits to is that total assets are at least the sum of what it owes. An
+          off-chain solvency watch checks it on a five-minute interval and pauses the protocol on a shortfall.
+          Because assets are derived from real balances rather than a stored counter, a shortfall means the contract
+          is genuinely short — not that a number drifted.
         </P>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-4">
           {[
-            { risk: 'Strategy Loss', mitigation: 'Allocation caps, governance approval, audit requirements before deployment.' },
-            { risk: 'Bad Debt', mitigation: 'Conservative LTV ratios, liquidation thresholds, and insurance fund absorption.' },
-            { risk: 'Oracle Failure', mitigation: 'TWAP prices, stale price rejection, fallback oracle routes, circuit breakers.' },
-            { risk: 'Liquidity Shortfall', mitigation: 'Dynamic buffer ratio, withdrawal queue, scenario-based liquidity modeling.' },
+            { risk: 'Accounting drift', mitigation: 'Assets derived from balances on every read; no stored numerator to diverge from holdings.' },
+            { risk: 'Share price manipulation', mitigation: '1,000 shares locked at first deposit, so an empty vault cannot be donated into.' },
+            { risk: 'Bad debt in lending', mitigation: 'Conservative collateral factor, liquidation threshold, and a reserve utilisation cap that bounds recursive leverage.' },
+            { risk: 'Admin overreach', mitigation: 'No entrypoint sets the exchange rate. Lending reads it from the vault. Governance has a timelock.' },
           ].map((r) => (
             <div key={r.risk} className="card p-4">
               <p className="font-medium text-black text-sm mb-1">{r.risk}</p>
@@ -471,6 +492,12 @@ function DocContent() {
             </div>
           ))}
         </div>
+        <P>
+          <strong className="text-black font-medium">There is no oracle.</strong> Earlier drafts of this page described TWAP pricing,
+          stale-price rejection, fallback routes and circuit breakers. None of that exists, and none of it is needed
+          while sXLM is priced from vault assets and shares rather than from a market feed. It becomes necessary the
+          moment a strategy or a second collateral asset is added.
+        </P>
       </section>
 
       <div className="border-t border-[#e5e5e5] my-12" />
@@ -479,35 +506,52 @@ function DocContent() {
       <section id="liquidity-model" className="scroll-mt-20">
         <H2 id="liq-h">Liquidity Model</H2>
         <P>
-          The vault maintains a liquidity buffer — a target ratio <Code>β_target</Code> of TVL — dynamically adjusted based on
-          observed withdrawals, strategy liquidity, and market stress.
+          Every deposited XLM currently sits in the vault contract, so the vault is fully liquid and every withdrawal
+          settles immediately. A redemption queue exists in the contract and is exercised only when the free balance
+          is smaller than a withdrawal — a state that cannot occur while nothing is deployed.
         </P>
         <P>
-          If idle liquidity is sufficient, withdrawals settle directly from the buffer. If requested withdrawals exceed
-          available buffer liquidity, users enter a redemption queue while the keeper repatriates funds from approved strategies.
-          Displayed withdrawal estimates are labeled as estimates, not guarantees.
+          When a withdrawal does queue, its XLM is recorded as a liability the moment the shares are burned, so the
+          exchange rate does not rise for remaining holders during the wait. Earlier drafts described a target buffer
+          ratio adjusted against market stress; no such targeting is implemented, and none is meaningful while the
+          buffer is the entire balance.
         </P>
 
-        <H3 id="depeg">Depeg Handling</H3>
+        <H3 id="depeg">Market Price vs Vault Rate</H3>
         <P>
-          sXLM may trade below its vault exchange rate during liquidity stress, oracle uncertainty, or strategy risk.
-          A depeg does not automatically mean insolvency — the key distinction is whether market price deviated from vault exchange rate
-          due to temporary liquidity stress or because underlying vault assets suffered losses.
+          sXLM may trade below what the vault would redeem it for during liquidity stress or uncertainty. That is not
+          by itself insolvency: the distinction is whether the market price moved away from the vault rate, or whether
+          the vault's assets themselves fell. The vault rate is computed from balances and is the one to check.
         </P>
       </section>
 
       <div className="border-t border-[#e5e5e5] my-12" />
 
       {/* ── INSURANCE FUND ── */}
-      <section id="insurance-fund" className="scroll-mt-20">
-        <H2 id="ins-h">Insurance Fund</H2>
+      <section id="current-limits" className="scroll-mt-20">
+        <H2 id="limits-h">Current Limits</H2>
         <P>
-          The insurance fund is funded through a defined portion of protocol fees. Its purpose is to absorb limited losses
-          from bad debt, oracle failures, or approved strategy losses. It should not be marketed as a guarantee of full repayment.
+          What the protocol does not yet do, stated plainly, because the alternative is describing machinery that
+          does not exist:
         </P>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-4">
+          {[
+            { title: 'No insurance fund', desc: 'Losses are not backstopped. Earlier drafts described a fee-funded fund absorbing bad debt; it was never built.' },
+            { title: 'No strategy allocation', desc: 'The vault holds idle XLM. Nothing is routed to lending markets or AMMs, so nothing generates revenue.' },
+            { title: 'No oracle', desc: 'sXLM is priced from vault assets and shares. There is no external price feed, and therefore no feed to harden.' },
+            { title: 'Unaudited', desc: 'Deployed on mainnet with source not yet verified on public explorers. Treat it accordingly.' },
+          ].map((l) => (
+            <div key={l.title} className="card p-4">
+              <p className="font-medium text-black text-sm mb-1">{l.title}</p>
+              <p className="text-xs text-black/60 leading-relaxed">{l.desc}</p>
+            </div>
+          ))}
+        </div>
         <P>
-          The fund reduces loss severity but does not eliminate strategy risk. If losses exceed the fund,
-          remaining losses are socialized through a lower vault exchange rate.
+          The consequence worth being explicit about: <strong className="text-black font-medium">sXLM does not currently earn yield.</strong>
+          The exchange rate rises only when XLM is contributed to the vault, and the only function that can do that
+          transfers the XLM in first. Holding sXLM today is holding a claim on pooled XLM that is composable across
+          the lending market and the pool — not a yield position.
         </P>
       </section>
 
@@ -516,13 +560,17 @@ function DocContent() {
       {/* ── AUDIT PLAN ── */}
       <section id="audit-plan" className="scroll-mt-20">
         <H2 id="audit-h">Audit Plan</H2>
-        <P>Before mainnet deployment, StelloFi completes:</P>
+        <P>
+          The contracts are deployed on Stellar mainnet and their source is <strong className="text-black font-medium">not yet verified</strong> on
+          public explorers. Treat the protocol as unaudited. The following are outstanding:
+        </P>
         <ul className="space-y-2 my-4 text-sm text-black/70">
           {[
             'Internal unit and integration testing',
             'Property-based testing for share accounting',
             'Invariant testing for deposits, withdrawals, and exchange-rate updates',
             'External audit of Soroban contracts',
+            'Source verification on stellar.expert',
             'Oracle manipulation review',
             'Keeper permission review',
             'Economic stress testing',
@@ -562,8 +610,8 @@ function DocContent() {
         <P>All contracts deployed on Stellar Mainnet:</P>
         <div className="space-y-3 my-4">
           {[
-            { name: 'sXLM Token', id: 'CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA' },
-            { name: 'Vault (Staking)', id: 'CDYXKWVDGEVA6OSIGN7GRAPPRN6AKID35OJL5ZZQIBCMECZ35KGL45PS' },
+            { name: 'sXLM Token', id: 'CCGFHMW3NZD5Z7ATHYHZSEG6ABCJADUHP5HIAWFPR37CP4VGNEDQO7FJ' },
+            { name: 'Vault', id: 'CDYXKWVDGEVA6OSIGN7GRAPPRN6AKID35OJL5ZZQIBCMECZ35KGL45PS' },
             { name: 'Lending', id: 'CAOWXZ6BWA2ZYY7GHD75OFKADKUJS4WCKPDYGGXULQWFJRB55TXAQNJG' },
             { name: 'LP Pool', id: 'CAW2DRMOI3CCJWKVMEUWYJUEQHXB4S4DR72HNL2DWQCMQQUH3LFFVLHV' },
             { name: 'Governance', id: 'CB7LV3FBQ7US26GVC7SM7RMX22IEEHAEUL7V3TDDWM32DHA5TDFDDEP4' },
@@ -586,7 +634,7 @@ function DocContent() {
           {[
             { path: 'frontend/', desc: 'React + Vite + TypeScript client app', detail: 'npm run dev (port 5173)' },
             { path: 'backend/', desc: 'Node.js + Fastify API + Prisma + Redis', detail: 'npm run dev (port 3001)' },
-            { path: 'contract/', desc: 'Rust Soroban smart contracts (Cargo)', detail: 'cargo build --target wasm32-unknown-unknown' },
+            { path: 'contracts/', desc: 'Rust Soroban smart contracts (Cargo)', detail: 'cargo build --target wasm32-unknown-unknown' },
           ].map((p) => (
             <div key={p.path} className="card p-4">
               <p className="font-mono text-sm text-black mb-1">{p.path}</p>
@@ -599,7 +647,7 @@ function DocContent() {
         <H3 id="env-vars">Environment Variables</H3>
         <P>Frontend environment variables (prefix: <Code>VITE_</Code>):</P>
         <Formula>
-          {'VITE_SXLM_TOKEN_CONTRACT_ID=CAS3...\nVITE_STAKING_CONTRACT_ID=CDYX...\nVITE_LENDING_CONTRACT_ID=CAOW...\nVITE_LP_POOL_CONTRACT_ID=CAW2...\nVITE_GOVERNANCE_CONTRACT_ID=CB7L...\nVITE_STELLAR_NETWORK=mainnet'}
+          {'VITE_SXLM_TOKEN_CONTRACT_ID=CCGF...\nVITE_STAKING_CONTRACT_ID=CDYX...\nVITE_LENDING_CONTRACT_ID=CAOW...\nVITE_LP_POOL_CONTRACT_ID=CAW2...\nVITE_GOVERNANCE_CONTRACT_ID=CB7L...\nVITE_STELLAR_NETWORK=mainnet'}
         </Formula>
       </section>
 

@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { initEventBus, shutdownEventBus } from "./event-bus/index.js";
-import { StakingEngine } from "./staking-engine/index.js";
+import { StakingEngine } from "./vault-engine/index.js";
 import { RewardEngine } from "./reward-engine/index.js";
 import { RiskEngine } from "./risk-engine/index.js";
 import { EventListenerService } from "./event-listener/index.js";

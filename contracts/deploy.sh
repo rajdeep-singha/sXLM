@@ -28,12 +28,12 @@ cd "$SCRIPT_DIR"
 stellar contract build 2>&1 || cargo build --release --target wasm32v1-none
 
 TOKEN_WASM="$SCRIPT_DIR/target/wasm32v1-none/release/sxlm_token.wasm"
-STAKING_WASM="$SCRIPT_DIR/target/wasm32v1-none/release/sxlm_staking.wasm"
+VAULT_WASM="$SCRIPT_DIR/target/wasm32v1-none/release/sxlm_vault.wasm"
 LENDING_WASM="$SCRIPT_DIR/target/wasm32v1-none/release/sxlm_lending.wasm"
 LP_POOL_WASM="$SCRIPT_DIR/target/wasm32v1-none/release/sxlm_lp_pool.wasm"
 GOVERNANCE_WASM="$SCRIPT_DIR/target/wasm32v1-none/release/sxlm_governance.wasm"
 
-for wasm in "$TOKEN_WASM" "$STAKING_WASM" "$LENDING_WASM" "$LP_POOL_WASM" "$GOVERNANCE_WASM"; do
+for wasm in "$TOKEN_WASM" "$VAULT_WASM" "$LENDING_WASM" "$LP_POOL_WASM" "$GOVERNANCE_WASM"; do
   if [ ! -f "$wasm" ]; then
     echo "ERROR: WASM not found at $wasm"
     exit 1
@@ -59,12 +59,12 @@ echo "  Token Contract ID: $TOKEN_CONTRACT_ID"
 # ---------------------------------------------------------------------------
 echo "[3/10] Deploying Staking contract..."
 STAKING_CONTRACT_ID=$(stellar contract deploy \
-  --wasm "$STAKING_WASM" \
+  --wasm "$VAULT_WASM" \
   --source "$ACCOUNT" \
   --network "$NETWORK" \
   2>&1)
 
-echo "  Staking Contract ID: $STAKING_CONTRACT_ID"
+echo "  Vault Contract ID: $STAKING_CONTRACT_ID"
 
 # ---------------------------------------------------------------------------
 # Step 4: Deploy Lending contract
@@ -154,7 +154,7 @@ stellar contract invoke \
   --native_token "$NATIVE_TOKEN_ID" \
   --cooldown_period 17280
 
-echo "  Staking contract initialized"
+echo "  Vault contract initialized"
 
 echo "[10/10] Initializing Milestone 5 contracts..."
 
@@ -169,9 +169,10 @@ stellar contract invoke \
   --native_token "$NATIVE_TOKEN_ID" \
   --collateral_factor_bps 7000 \
   --liquidation_threshold_bps 8000 \
-  --borrow_rate_bps 500
+  --borrow_rate_bps 500 \
+  --vault "$STAKING_CONTRACT_ID"
 
-echo "  Lending contract initialized"
+echo "  Lending contract initialized (reads sXLM rate from the vault)"
 
 # LP Pool: fee=30bps (0.3%)
 stellar contract invoke \
@@ -182,11 +183,13 @@ stellar contract invoke \
   --admin "$ADMIN_PUB_KEY" \
   --sxlm_token "$TOKEN_CONTRACT_ID" \
   --native_token "$NATIVE_TOKEN_ID" \
-  --fee_bps 30
+  --fee_bps 30 \
+  --vault "$STAKING_CONTRACT_ID"
 
 echo "  LP Pool contract initialized"
 
-# Governance: voting_period=17280 ledgers (~24h), quorum=1000bps (10%)
+# Governance: voting_period=17280 ledgers (~24h), quorum=1000bps (10%),
+# execution_delay=17280 ledgers (~24h) between a vote passing and taking effect
 stellar contract invoke \
   --id "$GOVERNANCE_CONTRACT_ID" \
   --source "$ACCOUNT" \
@@ -195,7 +198,8 @@ stellar contract invoke \
   --admin "$ADMIN_PUB_KEY" \
   --sxlm_token "$TOKEN_CONTRACT_ID" \
   --voting_period_ledgers 17280 \
-  --quorum_bps 1000
+  --quorum_bps 1000 \
+  --execution_delay_ledgers 17280
 
 echo "  Governance contract initialized"
 

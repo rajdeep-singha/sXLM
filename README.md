@@ -1,6 +1,10 @@
-# STELLO
+# StelloFi
 
-A liquid staking protocol for Stellar (XLM) built on Soroban. Users stake XLM to receive sXLM, participate in validator delegation, and access lending, liquidity pools, governance, and leverage features.
+A yield-bearing XLM vault on Stellar, built on Soroban. Deposit XLM to receive **sXLM**, a share token representing a proportional claim on pooled XLM, usable as collateral in the lending market and in the XLM/sXLM pool.
+
+> **Status.** The contracts are deployed on Stellar **mainnet** and their source is **not verified** on public explorers. Treat the protocol as unaudited. There is no strategy allocation yet, so the vault holds idle XLM and the exchange rate does not rise on its own — see [Yield](#yield).
+
+Stellar has no native staking rewards and no validator slashing. This is a vault, not a liquid staking protocol; earlier versions of this repository described it as the latter.
 
 ---
 ## User FeedBack
@@ -12,12 +16,12 @@ The project is a monorepo with three main components:
 
 | Component | Description |
 |-----------|-------------|
-| **contract** | Soroban smart contracts (Rust). sXLM token, staking, lending, LP pool, and governance. |
-| **backend** | Node.js API and off-chain services. Handles indexing, validators, rewards, risk, and keeper logic. |
-| **frontend** | React SPA. Stake, withdraw, validators, analytics, lending, liquidity, governance, leverage, restaking. |
+| **contracts** | Soroban smart contracts (Rust). sXLM token, vault, lending, LP pool, and governance. |
+| **backend** | Node.js API and off-chain services. Handles indexing, exchange-rate snapshots, solvency monitoring and keeper logic. |
+| **frontend** | React SPA. Stake, withdraw, analytics, lending, liquidity, governance, docs. |
 
-- **Chain:** Stellar (Soroban). Default configuration targets Stellar Testnet.
-- **Data:** PostgreSQL (Prisma) for validators, metrics, withdrawals, positions, governance; Redis for event bus.
+- **Chain:** Stellar (Soroban). Default configuration targets Stellar **mainnet**.
+- **Data:** PostgreSQL (Prisma) for metrics, withdrawals, positions and governance; Redis for event bus.
 - **Wallet:** Stellar Freighter (frontend); backend uses admin keypair for contract interactions.
 
 ---
@@ -26,8 +30,8 @@ The project is a monorepo with three main components:
 
 | Contract | Address |
 |----------|---------|
-| sXLM Token | `CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA` |
-| Staking | `CDYXKWVDGEVA6OSIGN7GRAPPRN6AKID35OJL5ZZQIBCMECZ35KGL45PS` |
+| sXLM Token | `CCGFHMW3NZD5Z7ATHYHZSEG6ABCJADUHP5HIAWFPR37CP4VGNEDQO7FJ` |
+| Vault | `CDYXKWVDGEVA6OSIGN7GRAPPRN6AKID35OJL5ZZQIBCMECZ35KGL45PS` |
 | LP Pool | `CAW2DRMOI3CCJWKVMEUWYJUEQHXB4S4DR72HNL2DWQCMQQUH3LFFVLHV` |
 | Lending | `CAOWXZ6BWA2ZYY7GHD75OFKADKUJS4WCKPDYGGXULQWFJRB55TXAQNJG` |
 | Governance | `CB7LV3FBQ7US26GVC7SM7RMX22IEEHAEUL7V3TDDWM32DHA5TDFDDEP4` |
@@ -35,7 +39,7 @@ The project is a monorepo with three main components:
 Backend `.env`:
 
 ```
-SXLM_TOKEN_CONTRACT_ID=CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA
+SXLM_TOKEN_CONTRACT_ID=CCGFHMW3NZD5Z7ATHYHZSEG6ABCJADUHP5HIAWFPR37CP4VGNEDQO7FJ
 STAKING_CONTRACT_ID=CDYXKWVDGEVA6OSIGN7GRAPPRN6AKID35OJL5ZZQIBCMECZ35KGL45PS
 LP_POOL_CONTRACT_ID=CAW2DRMOI3CCJWKVMEUWYJUEQHXB4S4DR72HNL2DWQCMQQUH3LFFVLHV
 LENDING_CONTRACT_ID=CAOWXZ6BWA2ZYY7GHD75OFKADKUJS4WCKPDYGGXULQWFJRB55TXAQNJG
@@ -43,6 +47,24 @@ GOVERNANCE_CONTRACT_ID=CB7LV3FBQ7US26GVC7SM7RMX22IEEHAEUL7V3TDDWM32DHA5TDFDDEP4
 ```
 
 For the frontend, set the same IDs with the `VITE_` prefix (e.g. `VITE_SXLM_TOKEN_CONTRACT_ID`, `VITE_STAKING_CONTRACT_ID`, etc.).
+
+---
+
+## Yield
+
+sXLM appreciates only when the vault holds more XLM per share than it did before. That requires an external
+strategy to return real revenue, and **no strategy allocation exists yet** — the vault holds idle XLM, so the
+exchange rate does not rise on its own.
+
+Two things follow, and they are worth stating plainly rather than in a footnote:
+
+- **Stellar has no native staking yield.** There is no validator reward to pass through, and no slashing to
+  guard against. Any yield has to come from lending markets, AMM fees or protocol incentives.
+- **APY displayed in the app is derived from realised exchange-rate history**, not projected. With no strategy
+  deployed, that history is flat, and the app shows it flat rather than filling the chart with an estimate.
+
+`add_rewards` transfers XLM into the vault and takes a protocol fee; it cannot raise the exchange rate without
+the assets arriving first. There is no admin path that raises the rate on its own.
 
 ---
 
@@ -62,14 +84,14 @@ For the frontend, set the same IDs with the `VITE_` prefix (e.g. `VITE_SXLM_TOKE
 From the repository root:
 
 ```bash
-cd contract
+cd contracts
 cargo build
 ```
 
 Workspace members:
 
-- `sxlm-token` — sXLM liquid staking token
-- `staking` — stake/unstake and delegation
+- `sxlm-token` — sXLM vault share token
+- `vault` — deposit, withdraw, share accounting
 - `lending` — collateralized lending
 - `lp-pool` — XLM/sXLM liquidity pool
 - `governance` — parameter proposals and voting
@@ -89,11 +111,7 @@ npm run dev
 
 Default dev server: `http://localhost:3001`.
 
-Optional: seed database with sample validators and metrics:
-
-```bash
-npm run seed
-```
+The seed script intentionally inserts nothing. Protocol metrics and reward snapshots are written only from on-chain reads, so there is no fixture data that would misrepresent TVL or APY.
 
 ### 3. Frontend
 
@@ -117,10 +135,10 @@ Default dev server: `http://localhost:5173`.
 | `DATABASE_URL` | PostgreSQL connection string |
 | `REDIS_URL` | Redis connection string (event bus) |
 | `STELLAR_RPC_URL` | Soroban RPC endpoint |
-| `STELLAR_NETWORK_PASSPHRASE` | Network passphrase (e.g. Test SDF Network) |
+| `STELLAR_NETWORK_PASSPHRASE` | Network passphrase (`Public Global Stellar Network ; September 2015` for mainnet) |
 | `STELLAR_HORIZON_URL` | Horizon API URL |
 | `SXLM_TOKEN_CONTRACT_ID` | Deployed sXLM token contract ID |
-| `STAKING_CONTRACT_ID` | Deployed staking contract ID |
+| `STAKING_CONTRACT_ID` | Deployed vault contract ID (name kept for deployment compatibility) |
 | `LENDING_CONTRACT_ID` | Deployed lending contract ID |
 | `LP_POOL_CONTRACT_ID` | Deployed LP pool contract ID |
 | `GOVERNANCE_CONTRACT_ID` | Deployed governance contract ID |
@@ -139,12 +157,12 @@ Prefix with `VITE_` so Vite exposes them to the client:
 
 | Variable | Description |
 |----------|-------------|
-| `VITE_NETWORK_NAME` | e.g. `TESTNET` |
+| `VITE_NETWORK_NAME` | e.g. `MAINNET` |
 | `VITE_NETWORK_PASSPHRASE` | Stellar network passphrase |
 | `VITE_HORIZON_URL` | Horizon URL |
 | `VITE_SOROBAN_RPC_URL` | Soroban RPC URL |
 | `VITE_SXLM_TOKEN_CONTRACT_ID` | sXLM token contract ID |
-| `VITE_STAKING_CONTRACT_ID` | Staking contract ID |
+| `VITE_STAKING_CONTRACT_ID` | Vault contract ID (name kept for deployment compatibility) |
 | `VITE_LENDING_CONTRACT_ID` | Lending contract ID |
 | `VITE_LP_POOL_CONTRACT_ID` | LP pool contract ID |
 | `VITE_GOVERNANCE_CONTRACT_ID` | Governance contract ID |
@@ -155,10 +173,10 @@ Prefix with `VITE_` so Vite exposes them to the client:
 ## Project Structure
 
 ```
-xlmLR/
-├── contract/                 # Soroban contracts (Rust workspace)
+StelloFi/
+├── contracts/                # Soroban contracts (Rust workspace)
 │   ├── sxlm-token/
-│   ├── staking/
+│   ├── vault/
 │   ├── lending/
 │   ├── lp-pool/
 │   └── governance/
@@ -169,17 +187,14 @@ xlmLR/
 │   │   └── seed.ts
 │   └── src/
 │       ├── api-gateway/      # Fastify server and routes
-│       ├── staking-engine/
-│       ├── validator-service/
-│       ├── reward-engine/
-│       ├── risk-engine/
+│       ├── vault-engine/     # contract client, tx execution, withdrawal queue
+│       ├── reward-engine/    # exchange-rate snapshots, derived APR
+│       ├── risk-engine/      # solvency watch
 │       ├── event-listener/
 │       ├── event-bus/
 │       ├── user-service/
 │       ├── metrics-cron/
 │       ├── keeper/
-│       ├── leverage-engine/
-│       ├── restaking-engine/
 │       └── config/
 └── frontend/                 # React + Vite SPA
     └── src/

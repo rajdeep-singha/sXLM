@@ -31,7 +31,7 @@ interface UseGovernanceReturn {
   error: string | null;
   lastTxHash: string | null;
   createProposal: (paramKey: string, newValue: string) => Promise<boolean>;
-  vote: (proposalId: number, support: boolean) => Promise<boolean>;
+  vote: (proposalId: number, support: boolean, amount: number) => Promise<boolean>;
   executeProposal: (proposalId: number) => Promise<boolean>;
   clearError: () => void;
   refresh: () => Promise<void>;
@@ -126,8 +126,8 @@ export function useGovernance(): UseGovernanceReturn {
   );
 
   const vote = useCallback(
-    (proposalId: number, support: boolean) =>
-      submitGovTx('vote', { proposalId, support }),
+    (proposalId: number, support: boolean, amount: number) =>
+      submitGovTx('vote', { proposalId, support, amount }),
     [submitGovTx]
   );
 
