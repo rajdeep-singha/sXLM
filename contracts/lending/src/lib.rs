@@ -505,6 +505,13 @@ impl LendingContract {
 
         // Liquidator receives sXLM worth (debt + 5% bonus) in XLM value
         // sxlm_to_seize = borrowed * (1 + bonus_bps/BPS) * RATE_PRECISION / exchange_rate
+        //
+        // The rate is a live read from the vault and can legitimately be zero if
+        // the vault has shares outstanding against no assets. Dividing by it
+        // then would fail as an arithmetic error rather than something a caller
+        // can act on, so refuse explicitly: worthless collateral cannot be
+        // priced, and seizing it would settle the debt for nothing.
+        assert!(er > 0, "vault reports no assets; collateral cannot be priced");
         let bonus_bps = read_liquidation_bonus(&env);
         let debt_with_bonus = borrowed * (BPS_DENOMINATOR + bonus_bps) / BPS_DENOMINATOR;
         let sxlm_to_seize = debt_with_bonus * RATE_PRECISION / er;
@@ -862,6 +869,24 @@ mod test {
         // 800 sits under the cap and goes through.
         client.borrow(&user, &800_0000000);
         assert_eq!(client.total_borrowed(), 800_0000000);
+    }
+
+    /// The vault reporting a zero rate is a real state — shares outstanding
+    /// against no assets. Liquidation used to divide by it.
+    #[test]
+    #[should_panic(expected = "vault reports no assets")]
+    fn liquidation_refuses_a_zero_vault_rate() {
+        let (env, contract_id, sxlm_id, _, user, liquidator, _, vault_id) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+
+        client.deposit_collateral(&user, &10_000_000_000);
+        client.borrow(&user, &5_000_000_000);
+
+        // Vault loses everything: shares remain, assets do not.
+        MockVaultClient::new(&env, &vault_id).set_rate(&0);
+
+        StellarAssetClient::new(&env, &sxlm_id).mint(&liquidator, &1_000_0000000);
+        client.liquidate(&liquidator, &user);
     }
 
     #[test]

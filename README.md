@@ -2,9 +2,7 @@
 
 A yield-bearing XLM vault on Stellar, built on Soroban. Deposit XLM to receive **sXLM**, a share token representing a proportional claim on pooled XLM, usable as collateral in the lending market and in the XLM/sXLM pool.
 
-> **Status.** The contracts are deployed on Stellar **mainnet** and their source is **not verified** on public explorers. Treat the protocol as unaudited. There is no strategy allocation yet, so the vault holds idle XLM and the exchange rate does not rise on its own — see [Yield](#yield).
-
-Stellar has no native staking rewards and no validator slashing. This is a vault, not a liquid staking protocol; earlier versions of this repository described it as the latter.
+Deployed on Stellar mainnet. Source is not verified on public explorers and the protocol is unaudited.
 
 ---
 ## User FeedBack
@@ -52,19 +50,9 @@ For the frontend, set the same IDs with the `VITE_` prefix (e.g. `VITE_SXLM_TOKE
 
 ## Yield
 
-sXLM appreciates only when the vault holds more XLM per share than it did before. That requires an external
-strategy to return real revenue, and **no strategy allocation exists yet** — the vault holds idle XLM, so the
-exchange rate does not rise on its own.
+No strategy allocation is implemented, so the vault holds idle XLM and the exchange rate does not rise on its own.
 
-Two things follow, and they are worth stating plainly rather than in a footnote:
-
-- **Stellar has no native staking yield.** There is no validator reward to pass through, and no slashing to
-  guard against. Any yield has to come from lending markets, AMM fees or protocol incentives.
-- **APY displayed in the app is derived from realised exchange-rate history**, not projected. With no strategy
-  deployed, that history is flat, and the app shows it flat rather than filling the chart with an estimate.
-
-`add_rewards` transfers XLM into the vault and takes a protocol fee; it cannot raise the exchange rate without
-the assets arriving first. There is no admin path that raises the rate on its own.
+`add_rewards` transfers XLM into the vault before crediting anything, so the rate cannot rise without assets arriving. APY shown in the app is derived from realised exchange-rate history.
 
 ---
 
@@ -111,7 +99,7 @@ npm run dev
 
 Default dev server: `http://localhost:3001`.
 
-The seed script intentionally inserts nothing. Protocol metrics and reward snapshots are written only from on-chain reads, so there is no fixture data that would misrepresent TVL or APY.
+The seed script inserts nothing. Metrics and reward snapshots come from on-chain reads.
 
 ### 3. Frontend
 

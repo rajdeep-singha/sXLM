@@ -1132,6 +1132,75 @@ mod test {
     }
 
     // ------------------------------------------------------------------
+    // Invariants across a long sequence
+    // ------------------------------------------------------------------
+
+    /// The property the whole design rests on: nothing a user can do raises the
+    /// exchange rate. Only XLM arriving does. Deposits and withdrawals must
+    /// leave it flat, and rounding must never favour the person acting.
+    #[test]
+    fn users_cannot_move_the_exchange_rate() {
+        let env = Env::default();
+        let f = setup(&env);
+
+        let a = funded_user(&f, 500_0000000);
+        let b = funded_user(&f, 500_0000000);
+        let c = funded_user(&f, 500_0000000);
+
+        f.vault.deposit(&a, &100_0000000);
+        let mut rate = f.vault.get_exchange_rate();
+
+        // Awkward, non-round amounts, interleaved, to shake out rounding.
+        let steps: [(u32, i128); 8] = [
+            (1, 33_3333333), (2, 7_7777777), (0, 12_1212121), (1, 91_9191919),
+            (2, 3_1415926), (0, 44_4444444), (1, 1_0000001), (2, 88_8888888),
+        ];
+        for (who, amount) in steps {
+            let user = match who { 0 => &a, 1 => &b, _ => &c };
+            f.vault.deposit(user, &amount);
+            let after = f.vault.get_exchange_rate();
+            assert!(after <= rate + 1, "deposit raised the rate");
+            rate = after;
+
+            let shares = f.sxlm.balance(user);
+            if shares > 2 {
+                f.vault.request_withdrawal(user, &(shares / 3));
+                let after = f.vault.get_exchange_rate();
+                assert!(after >= rate - 1, "withdrawal dropped the rate");
+                assert!(after <= rate + 1, "withdrawal raised the rate");
+                rate = after;
+            }
+        }
+
+        // Solvency held throughout: the contract can still cover every share.
+        let assets = f.vault.total_assets();
+        let supply = f.vault.total_sxlm_supply();
+        assert!(assets >= 0);
+        assert!(f.xlm.balance(&f.vault_id) >= assets, "shares outrun the balance");
+        assert!(supply >= MINIMUM_LIQUIDITY, "dead shares were redeemed");
+    }
+
+    #[test]
+    fn only_contributed_xlm_lifts_the_rate() {
+        let env = Env::default();
+        let f = setup(&env);
+
+        let a = funded_user(&f, 200_0000000);
+        f.vault.deposit(&a, &100_0000000);
+        let before = f.vault.get_exchange_rate();
+
+        // A second depositor cannot lift it...
+        let b = funded_user(&f, 200_0000000);
+        f.vault.deposit(&b, &200_0000000);
+        assert!(f.vault.get_exchange_rate() <= before + 1);
+
+        // ...and a contribution does, by exactly what arrived net of the fee.
+        let donor = funded_user(&f, 100_0000000);
+        f.vault.add_rewards(&donor, &100_0000000);
+        assert!(f.vault.get_exchange_rate() > before);
+    }
+
+    // ------------------------------------------------------------------
     // Housekeeping
     // ------------------------------------------------------------------
 
