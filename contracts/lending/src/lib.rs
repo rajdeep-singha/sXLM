@@ -183,15 +183,22 @@ fn write_user_borrowed(env: &Env, user: &Address, val: i128) {
         .extend_ttl(&key, USER_LIFETIME_THRESHOLD, USER_BUMP_AMOUNT);
 }
 
-/// Health Factor = (collateral × exchange_rate × collateral_factor_bps) / (BPS × RATE_PRECISION × borrowed)
-/// Returns HF scaled by RATE_PRECISION (so 1.0 = RATE_PRECISION)
-fn compute_health_factor(collateral: i128, borrowed: i128, cf_bps: i128, exchange_rate: i128) -> i128 {
+/// Health factor scaled by RATE_PRECISION, so 1.0 == RATE_PRECISION.
+///
+/// `factor_bps` is supplied by the caller and is not always the same number:
+/// borrowing and withdrawing measure against the collateral factor, liquidation
+/// against the looser liquidation threshold. The gap between them is the margin
+/// a borrower has before a position becomes liquidatable.
+fn compute_health_factor(
+    collateral: i128,
+    borrowed: i128,
+    factor_bps: i128,
+    exchange_rate: i128,
+) -> i128 {
     if borrowed == 0 {
-        return i128::MAX; // No debt = infinite health
+        return i128::MAX;
     }
-    // HF = (collateral * exchange_rate * cf_bps) / (BPS_DENOMINATOR * RATE_PRECISION * borrowed) * RATE_PRECISION
-    // Simplified: (collateral * exchange_rate * cf_bps) / (BPS_DENOMINATOR * borrowed)
-    (collateral * exchange_rate * cf_bps) / (BPS_DENOMINATOR * borrowed)
+    (collateral * exchange_rate * factor_bps) / (BPS_DENOMINATOR * borrowed)
 }
 
 #[contract]

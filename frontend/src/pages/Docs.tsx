@@ -402,7 +402,7 @@ function DocContent() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 my-4">
           {[
             { name: 'Base LTV', desc: 'Maximum borrowing power granted per unit of collateral.' },
-            { name: 'Liquidation Threshold', desc: 'Point at which a position is flagged as undercollateralized and subject to liquidation.' },
+            { name: 'Liquidation Threshold', desc: 'Point at which a position becomes liquidatable. Looser than the collateral factor, so a borrower is blocked from withdrawing before they can be liquidated.' },
             { name: 'Liquidation Penalty', desc: 'Fee extracted during liquidation to incentivize liquidators or keeper services.' },
             { name: 'Reserve Utilisation Cap', desc: 'Ceiling on how much of the reserve can be lent at once. Bounds recursive leverage and preserves exit liquidity.' },
           ].map((p) => (
@@ -413,9 +413,13 @@ function DocContent() {
           ))}
         </div>
         <Formula>
-          {'Health Factor (HF) = Σ(collateral_i × LT_i) / total_borrowed'}
+          {'HF = collateral × E(t) × factor / borrowed'}
           <br />
-          {'HF < 1.0 → position eligible for liquidation'}
+          {'liquidation uses the liquidation threshold; borrowing and'}
+          <br />
+          {'withdrawing use the stricter collateral factor'}
+          <br />
+          {'HF < 1.0 → eligible for liquidation'}
         </Formula>
         <P>
           Recursive leverage using sXLM as collateral is a user-level position, not protocol yield. Borrowed XLM can
@@ -578,15 +582,16 @@ function DocContent() {
           ))}
         </ul>
 
-        <H3 id="invariants">Critical Invariants</H3>
+        <H3 id="invariants">Invariants the contracts enforce</H3>
         <div className="space-y-2 my-4">
           {[
-            'User deposits must not dilute existing users',
-            'Withdrawals must burn correct shares',
-            'Exchange rate cannot be arbitrarily changed by admin',
-            'Keeper cannot drain funds',
-            'Strategy losses must be reflected transparently',
-            'Total assets ≥ redeemable liabilities unless a loss event is declared',
+            'Depositing does not dilute existing holders — shares are minted at the current rate, floored toward the pool',
+            'Withdrawing burns shares and records the payout as a liability in the same call',
+            'No entrypoint sets the exchange rate. It is computed from balances on every read',
+            'The exchange rate cannot rise unless XLM has already been transferred in',
+            'Protocol fees are excluded from the assets backing shares until withdrawn',
+            'The first 1,000 shares are locked to the contract and can never be redeemed',
+            'Lending values sXLM by calling the vault, not from any stored or admin-set number',
           ].map((inv) => (
             <div key={inv} className="flex items-start gap-2 text-sm">
               <span className="text-green-600 font-mono mt-0.5">✓</span>
@@ -594,6 +599,29 @@ function DocContent() {
             </div>
           ))}
         </div>
+
+        <H3 id="admin-authority">What the admin key can still do</H3>
+        <P>
+          The invariants above hold for the contracts as deployed. They do not hold against the admin key, and it is
+          more honest to say so than to list guarantees that a single signature can remove.
+        </P>
+        <div className="space-y-2 my-4">
+          {[
+            ['Upgrade any contract', 'All five accept a new WASM from the admin. New code can do anything, including ignoring every invariant above. This is the root authority — everything else on this list is a consequence of it.'],
+            ['Pause deposits and withdrawals', 'Intended for emergencies. There is no time limit on a pause.'],
+            ['Withdraw accrued protocol fees', 'Capped at fees actually earned and at unencumbered balance, so it cannot reach the assets backing shares.'],
+            ['Change parameters until governance is configured', 'Fees, cooldown, collateral factor and the utilisation cap. Once set_governance is called on a contract, these need a passed proposal and a timelock instead.'],
+          ].map(([title, desc]) => (
+            <div key={title} className="card p-4">
+              <p className="font-medium text-black text-sm mb-1">{title}</p>
+              <p className="text-xs text-black/60 leading-relaxed">{desc}</p>
+            </div>
+          ))}
+        </div>
+        <P>
+          The admin key is currently a single Stellar account. Until it is a multisig, the protocol&rsquo;s security is
+          the security of that one key, whatever the contracts say.
+        </P>
       </section>
 
       <div className="border-t border-[#e5e5e5] my-12" />

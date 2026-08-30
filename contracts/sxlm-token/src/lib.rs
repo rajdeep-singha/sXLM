@@ -19,6 +19,8 @@ const BALANCE_BUMP_AMOUNT: u32 = 3_110_400;       // bump to ~180 days
 pub enum DataKey {
     Admin,
     Minter,
+    /// Governance contract. Once set, minter changes need a passed proposal.
+    Governance,
     Allowance(AllowanceKey),
     Balance(Address),
     TotalSupply,
@@ -270,11 +272,36 @@ impl SxlmToken {
     // --- Admin functions ---
 
     /// Update the minter address (e.g., if staking contract is redeployed).
+    /// Change which address may mint.
+    ///
+    /// Minting without a matching deposit dilutes every holder, so once
+    /// governance is configured this needs a passed proposal rather than a
+    /// single key.
     pub fn set_minter(env: Env, new_minter: Address) {
-        let admin = read_admin(&env);
-        admin.require_auth();
+        match env.storage().instance().get::<DataKey, Address>(&DataKey::Governance) {
+            Some(gov) => gov.require_auth(),
+            None => read_admin(&env).require_auth(),
+        }
         extend_instance(&env);
         env.storage().instance().set(&DataKey::Minter, &new_minter);
+        env.events().publish((soroban_sdk::symbol_short!("minter"),), new_minter);
+    }
+
+    /// Hand minter control to governance, once.
+    pub fn set_governance(env: Env, governance: Address) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+        if env.storage().instance().has(&DataKey::Governance) {
+            panic!("governance already set");
+        }
+        extend_instance(&env);
+        env.storage().instance().set(&DataKey::Governance, &governance);
+        env.events().publish((soroban_sdk::symbol_short!("gov_set"),), governance);
+    }
+
+    pub fn governance(env: Env) -> Address {
+        extend_instance(&env);
+        env.storage().instance().get(&DataKey::Governance).expect("governance not configured")
     }
 
     /// Transfer admin role.
