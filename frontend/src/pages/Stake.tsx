@@ -9,11 +9,11 @@ export default function Stake() {
     <div className="max-w-lg mx-auto px-4 py-10 space-y-5">
       <div>
         <p className="text-[11px] uppercase tracking-widest mb-2 text-gray-400">
-          Liquid Staking
+          Vault
         </p>
         <h1 className="text-2xl font-semibold text-black mb-1" style={{ letterSpacing: '-0.02em' }}>Stake XLM</h1>
         <p className="text-sm text-gray-500">
-          Earn {formatAPY(apy.currentApy)} APY · receive yield-bearing sXLM
+          Deposit XLM, receive sXLM · current rate {formatAPY(apy.currentApy)} APY
         </p>
       </div>
 

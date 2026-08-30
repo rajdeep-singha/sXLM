@@ -34,8 +34,8 @@ export default function HeroSection() {
             className="text-black/70 text-base md:text-lg max-w-md mb-8 leading-relaxed"
             style={{ fontFamily: "'Inter', ui-sans-serif, system-ui, sans-serif" }}
           >
-            A yield-bearing XLM vault that issues sXLM , a composable share token
-            backed by pooled XLM and conservative Stellar DeFi strategies.
+            An XLM vault that issues sXLM , a composable share token backed
+            one-for-one by pooled XLM, redeemable at the vault rate.
           </p>
           <Link
             to="/stake"

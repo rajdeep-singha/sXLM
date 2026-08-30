@@ -16,6 +16,13 @@ const DEFAULT_LIQUIDATION_BONUS_BPS: i128 = 500; // 5% bonus
 /// actually bounds it, and it keeps exit liquidity in the pool.
 const DEFAULT_MAX_UTILIZATION_BPS: i128 = 9000; // 90% of the reserve
 
+/// Seconds per year, for converting an annual rate into per-ledger accrual.
+const SECONDS_PER_YEAR: i128 = 31_536_000;
+/// Stellar closes a ledger roughly every 5 seconds.
+const SECONDS_PER_LEDGER: i128 = 5;
+/// Share of interest that reaches sXLM holders. The rest is protocol revenue.
+const DEFAULT_VAULT_SHARE_BPS: i128 = 8000; // 80%
+
 // ---------- TTL constants ----------
 // Testnet: ~5s per ledger
 // 30 days  ≈  518_400 ledgers
@@ -39,6 +46,15 @@ pub enum DataKey {
     MaxUtilizationBps,
     /// Governance contract, the only caller allowed to change parameters.
     Governance,
+    /// Cumulative borrow index, scaled by RATE_PRECISION. Starts at 1.0 and
+    /// only ever rises, so a debt recorded against it grows with time.
+    BorrowIndex,
+    /// Ledger at which the index was last advanced.
+    LastAccrualLedger,
+    /// Interest charged to borrowers and not yet passed to the vault.
+    InterestAccrued,
+    /// Vault share of interest, in basis points. The remainder is protocol fee.
+    VaultShareBps,
     /// Address of the vault contract. The sXLM price is read from it rather
     /// than stored here, so no admin can set the number this contract values
     /// collateral at.
@@ -164,20 +180,93 @@ fn write_user_collateral(env: &Env, user: &Address, val: i128) {
         .extend_ttl(&key, USER_LIFETIME_THRESHOLD, USER_BUMP_AMOUNT);
 }
 
+fn read_borrow_index(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::BorrowIndex)
+        .unwrap_or(RATE_PRECISION)
+}
+
+fn read_vault_share_bps(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::VaultShareBps)
+        .unwrap_or(DEFAULT_VAULT_SHARE_BPS)
+}
+
+/// Advance the borrow index to the current ledger.
+///
+/// Interest is simple over each elapsed span and compounds across spans, which
+/// is what an index does. It must run before any read or write of a debt, or a
+/// borrower could repay at a stale index and keep the interest.
+fn accrue_interest(env: &Env) {
+    let now = env.ledger().sequence();
+    let last: u32 = match env.storage().instance().get(&DataKey::LastAccrualLedger) {
+        Some(l) => l,
+        None => {
+            // First touch, including the first call after upgrading from a build
+            // without interest. Start the clock here so nobody is charged for
+            // time the contract could not account for.
+            env.storage().instance().set(&DataKey::LastAccrualLedger, &now);
+            return;
+        }
+    };
+
+    if now <= last {
+        return;
+    }
+    env.storage().instance().set(&DataKey::LastAccrualLedger, &now);
+
+    let scaled_total = read_i128(env, &DataKey::TotalBorrowed);
+    let index = read_borrow_index(env);
+    let rate_bps = read_i128(env, &DataKey::BorrowRateBps);
+    if scaled_total <= 0 || rate_bps <= 0 {
+        return;
+    }
+
+    let elapsed = (now - last) as i128;
+    let growth = index * rate_bps * elapsed * SECONDS_PER_LEDGER
+        / (BPS_DENOMINATOR * SECONDS_PER_YEAR);
+    if growth <= 0 {
+        return;
+    }
+
+    let debt_before = scaled_total * index / RATE_PRECISION;
+    let new_index = index + growth;
+    let debt_after = scaled_total * new_index / RATE_PRECISION;
+
+    env.storage().instance().set(&DataKey::BorrowIndex, &new_index);
+    let accrued = read_i128(env, &DataKey::InterestAccrued);
+    write_i128(env, &DataKey::InterestAccrued, accrued + (debt_after - debt_before));
+}
+
+/// Total outstanding debt in XLM, including accrued interest.
+fn read_total_borrowed(env: &Env) -> i128 {
+    read_i128(env, &DataKey::TotalBorrowed) * read_borrow_index(env) / RATE_PRECISION
+}
+
+fn write_total_borrowed(env: &Env, val: i128) {
+    write_i128(env, &DataKey::TotalBorrowed, val * RATE_PRECISION / read_borrow_index(env));
+}
+
 fn read_user_borrowed(env: &Env, user: &Address) -> i128 {
     let key = DataKey::Borrowed(user.clone());
-    let val: i128 = env.storage().persistent().get(&key).unwrap_or(0);
-    if val > 0 {
+    let scaled: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+    if scaled > 0 {
         env.storage()
             .persistent()
             .extend_ttl(&key, USER_LIFETIME_THRESHOLD, USER_BUMP_AMOUNT);
     }
-    val
+    // Debt is stored against the index at the time it was taken on, so it grows
+    // as the index does. The index starts at 1.0, which makes debts recorded
+    // before interest existed carry over unchanged.
+    scaled * read_borrow_index(env) / RATE_PRECISION
 }
 
 fn write_user_borrowed(env: &Env, user: &Address, val: i128) {
     let key = DataKey::Borrowed(user.clone());
-    env.storage().persistent().set(&key, &val);
+    let scaled = val * RATE_PRECISION / read_borrow_index(env);
+    env.storage().persistent().set(&key, &scaled);
     env.storage()
         .persistent()
         .extend_ttl(&key, USER_LIFETIME_THRESHOLD, USER_BUMP_AMOUNT);
@@ -230,6 +319,9 @@ impl LendingContract {
         env.storage().instance().set(&DataKey::BorrowRateBps, &(borrow_rate_bps as i128));
         env.storage().instance().set(&DataKey::LiquidationBonusBps, &DEFAULT_LIQUIDATION_BONUS_BPS);
         env.storage().instance().set(&DataKey::MaxUtilizationBps, &DEFAULT_MAX_UTILIZATION_BPS);
+        env.storage().instance().set(&DataKey::BorrowIndex, &RATE_PRECISION);
+        env.storage().instance().set(&DataKey::LastAccrualLedger, &env.ledger().sequence());
+        env.storage().instance().set(&DataKey::VaultShareBps, &DEFAULT_VAULT_SHARE_BPS);
         env.storage().instance().set(&DataKey::Vault, &vault);
         extend_instance(&env);
     }
@@ -271,6 +363,55 @@ impl LendingContract {
         );
     }
 
+    /// Pass accrued interest to the vault, raising the sXLM exchange rate.
+    ///
+    /// Callable by anyone — it moves money in one direction only, from this
+    /// contract to holders, so there is nothing to gain by calling it and
+    /// nothing to lose by letting anyone.
+    ///
+    /// The vault takes its own protocol fee out of what arrives, so this split
+    /// is on top of that one: `VaultShareBps` reaches holders and the remainder
+    /// stays here as protocol revenue.
+    pub fn settle_interest(env: Env) -> i128 {
+        extend_instance(&env);
+        accrue_interest(&env);
+
+        let accrued = read_i128(&env, &DataKey::InterestAccrued);
+        if accrued <= 0 {
+            return 0;
+        }
+
+        // Only interest that borrowers have actually repaid is here to send.
+        // Anything still owed stays booked until it arrives.
+        let native = read_native_token(&env);
+        let native_client = token::Client::new(&env, &native);
+        let liquid = native_client.balance(&env.current_contract_address());
+        let payable = if accrued > liquid { liquid } else { accrued };
+        if payable <= 0 {
+            return 0;
+        }
+
+        let to_vault = payable * read_vault_share_bps(&env) / BPS_DENOMINATOR;
+        if to_vault <= 0 {
+            return 0;
+        }
+
+        // A plain transfer is enough. The vault derives its assets from its own
+        // balance on every read, so XLM arriving raises the exchange rate with
+        // no call and no permission to grant.
+        let vault = read_vault(&env).expect("vault not configured");
+        native_client.transfer(&env.current_contract_address(), &vault, &to_vault);
+
+        write_i128(&env, &DataKey::InterestAccrued, accrued - payable);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("settled"),),
+            (to_vault, payable - to_vault),
+        );
+
+        to_vault
+    }
+
     /// Hand parameter control to the governance contract, once.
     pub fn set_governance(env: Env, governance: Address) {
         let admin = read_admin(&env);
@@ -302,6 +443,9 @@ impl LendingContract {
         } else if key == soroban_sdk::symbol_short!("bor_rate") {
             assert!(value >= 0 && value <= BPS_DENOMINATOR, "borrow rate out of range");
             env.storage().instance().set(&DataKey::BorrowRateBps, &value);
+        } else if key == soroban_sdk::symbol_short!("vlt_share") {
+            assert!(value >= 0 && value <= BPS_DENOMINATOR, "vault share out of range");
+            env.storage().instance().set(&DataKey::VaultShareBps, &value);
         } else if key == soroban_sdk::symbol_short!("max_util") {
             assert!(value > 0 && value <= BPS_DENOMINATOR, "utilization out of range");
             env.storage().instance().set(&DataKey::MaxUtilizationBps, &value);
@@ -386,6 +530,7 @@ impl LendingContract {
 
     /// Withdraw sXLM collateral if health factor stays above 1.0.
     pub fn withdraw_collateral(env: Env, user: Address, sxlm_amount: i128) {
+        accrue_interest(&env);
         user.require_auth();
         assert!(sxlm_amount > 0, "amount must be positive");
         extend_instance(&env);
@@ -423,6 +568,7 @@ impl LendingContract {
         user.require_auth();
         assert!(xlm_amount > 0, "amount must be positive");
         extend_instance(&env);
+        accrue_interest(&env);
 
         let collateral = read_user_collateral(&env, &user);
         let current_borrowed = read_user_borrowed(&env, &user);
@@ -434,11 +580,10 @@ impl LendingContract {
         let max_borrow = collateral * er * cf_bps / (BPS_DENOMINATOR * RATE_PRECISION);
         assert!(new_borrowed <= max_borrow, "borrow exceeds collateral limit");
 
-        let total = read_i128(&env, &DataKey::TotalBorrowed);
-        let new_total = total + xlm_amount;
+        let new_total = read_total_borrowed(&env) + xlm_amount;
 
         write_user_borrowed(&env, &user, new_borrowed);
-        write_i128(&env, &DataKey::TotalBorrowed, new_total);
+        write_total_borrowed(&env, new_total);
 
         let native = read_native_token(&env);
         let native_client = token::Client::new(&env, &native);
@@ -470,6 +615,7 @@ impl LendingContract {
         user.require_auth();
         assert!(xlm_amount > 0, "amount must be positive");
         extend_instance(&env);
+        accrue_interest(&env);
 
         let borrowed = read_user_borrowed(&env, &user);
         let repay_amount = if xlm_amount > borrowed { borrowed } else { xlm_amount };
@@ -480,8 +626,7 @@ impl LendingContract {
 
         write_user_borrowed(&env, &user, borrowed - repay_amount);
 
-        let total = read_i128(&env, &DataKey::TotalBorrowed);
-        write_i128(&env, &DataKey::TotalBorrowed, total - repay_amount);
+        write_total_borrowed(&env, read_total_borrowed(&env) - repay_amount);
 
         env.events().publish(
             (soroban_sdk::symbol_short!("repay"),),
@@ -491,6 +636,7 @@ impl LendingContract {
 
     /// Liquidate an unhealthy position. Liquidator repays debt and receives collateral + bonus.
     pub fn liquidate(env: Env, liquidator: Address, borrower: Address) {
+        accrue_interest(&env);
         liquidator.require_auth();
         extend_instance(&env);
 
@@ -550,6 +696,7 @@ impl LendingContract {
     /// Returns (collateral, borrowed) for a user.
     pub fn get_position(env: Env, user: Address) -> (i128, i128) {
         extend_instance(&env);
+        accrue_interest(&env);
         extend_user_data(&env, &user);
         (
             read_user_collateral(&env, &user),
@@ -561,6 +708,7 @@ impl LendingContract {
     /// Uses liquidation threshold (not collateral factor) to match what liquidate() checks.
     pub fn health_factor(env: Env, user: Address) -> i128 {
         extend_instance(&env);
+        accrue_interest(&env);
         let collateral = read_user_collateral(&env, &user);
         let borrowed = read_user_borrowed(&env, &user);
         let lt_bps = read_liquidation_threshold(&env);
@@ -570,7 +718,26 @@ impl LendingContract {
 
     pub fn total_borrowed(env: Env) -> i128 {
         extend_instance(&env);
-        read_i128(&env, &DataKey::TotalBorrowed)
+        accrue_interest(&env);
+        read_total_borrowed(&env)
+    }
+
+    /// Interest charged to borrowers and not yet passed to the vault.
+    pub fn total_accrued_interest(env: Env) -> i128 {
+        extend_instance(&env);
+        accrue_interest(&env);
+        read_i128(&env, &DataKey::InterestAccrued)
+    }
+
+    pub fn get_borrow_index(env: Env) -> i128 {
+        extend_instance(&env);
+        accrue_interest(&env);
+        read_borrow_index(&env)
+    }
+
+    pub fn get_vault_share_bps(env: Env) -> i128 {
+        extend_instance(&env);
+        read_vault_share_bps(&env)
     }
 
     pub fn total_collateral(env: Env) -> i128 {
@@ -627,6 +794,7 @@ pub trait VaultInterface {
 mod test {
     use super::*;
     use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::Ledger;
     use soroban_sdk::{symbol_short, token::StellarAssetClient, Env};
 
     /// Stand-in for the vault. Only exposes the rate, and lets a test move it
@@ -644,6 +812,15 @@ mod test {
                 .instance()
                 .get(&symbol_short!("RATE"))
                 .unwrap_or(RATE_PRECISION)
+        }
+        pub fn add_rewards(env: Env, from: Address, amount: i128) {
+            from.require_auth();
+            let total: i128 = env.storage().instance()
+                .get(&symbol_short!("REW")).unwrap_or(0);
+            env.storage().instance().set(&symbol_short!("REW"), &(total + amount));
+        }
+        pub fn rewards_received(env: Env) -> i128 {
+            env.storage().instance().get(&symbol_short!("REW")).unwrap_or(0)
         }
     }
 
@@ -888,6 +1065,138 @@ mod test {
 
         StellarAssetClient::new(&env, &sxlm_id).mint(&liquidator, &1_000_0000000);
         client.liquidate(&liquidator, &user);
+    }
+
+    /// ~5.8 days of ledgers. Short enough to stay inside the default entry TTL
+    /// in the test environment, long enough for interest to be measurable.
+    const YEAR_LEDGERS: i128 = 6_307_200;
+    const SPAN: u32 = 100_000;
+
+    fn advance(env: &Env, ledgers: u32) {
+        env.ledger().with_mut(|l| l.sequence_number += ledgers);
+    }
+
+    /// Borrowing used to be free — the rate was stored, settable and never
+    /// charged. Debt must now grow with time.
+    #[test]
+    fn debt_grows_with_time() {
+        let (env, contract_id, _, _, user, _, _, _) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        client.update_borrow_rate(&400); // 4% a year
+
+        client.deposit_collateral(&user, &100_000_0000000);
+        client.borrow(&user, &1_000_0000000);
+        let (_, at_start) = client.get_position(&user);
+        assert_eq!(at_start, 1_000_0000000);
+
+        // A year of ledgers at ~5s each.
+        advance(&env, SPAN);
+        let (_, after_a_year) = client.get_position(&user);
+
+        // 4% a year, prorated over the span.
+        let expected_bps = 400 * (SPAN as i128) / YEAR_LEDGERS;
+        let growth_bps = (after_a_year - at_start) * 10_000 / at_start;
+        assert!(
+            (growth_bps - expected_bps).abs() <= 1,
+            "expected about {expected_bps} bps, got {growth_bps}"
+        );
+        assert!(growth_bps > 0, "no interest accrued at all");
+    }
+
+    #[test]
+    fn interest_is_booked_for_settlement() {
+        let (env, contract_id, _, _, user, _, _, _) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        client.update_borrow_rate(&400);
+
+        assert_eq!(client.total_accrued_interest(), 0);
+
+        client.deposit_collateral(&user, &100_000_0000000);
+        client.borrow(&user, &1_000_0000000);
+        advance(&env, SPAN);
+
+        let accrued = client.total_accrued_interest();
+        let expected = 1_000_0000000i128 * 400 * (SPAN as i128) / (10_000 * YEAR_LEDGERS);
+        assert!(
+            (accrued - expected).abs() <= expected / 100,
+            "expected about {expected} stroops of interest, got {accrued}"
+        );
+    }
+
+    #[test]
+    fn repaying_costs_more_than_was_borrowed() {
+        let (env, contract_id, _, native_id, user, _, _, _) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        client.update_borrow_rate(&400);
+
+        client.deposit_collateral(&user, &100_000_0000000);
+        client.borrow(&user, &1_000_0000000);
+        advance(&env, SPAN);
+
+        // Repaying exactly the principal leaves the interest outstanding.
+        client.repay(&user, &1_000_0000000);
+        let (_, still_owed) = client.get_position(&user);
+        assert!(still_owed > 0, "interest vanished on repayment");
+
+        StellarAssetClient::new(&env, &native_id).mint(&user, &100_0000000);
+        client.repay(&user, &still_owed);
+        let (_, cleared) = client.get_position(&user);
+        assert_eq!(cleared, 0);
+    }
+
+    #[test]
+    fn a_zero_rate_charges_nothing() {
+        let (env, contract_id, _, _, user, _, _, _) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        client.update_borrow_rate(&1);
+        client.set_param(&symbol_short!("bor_rate"), &0);
+
+        client.deposit_collateral(&user, &100_000_0000000);
+        client.borrow(&user, &1_000_0000000);
+        advance(&env, SPAN);
+        let (_, owed) = client.get_position(&user);
+        assert_eq!(owed, 1_000_0000000);
+    }
+
+    /// The whole point: interest paid by borrowers reaches sXLM holders as a
+    /// higher exchange rate, rather than sitting in the lending contract.
+    #[test]
+    fn settled_interest_raises_the_vault_rate() {
+        let (env, contract_id, _, native_id, user, _, _, vault_id) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        let vault = MockVaultClient::new(&env, &vault_id);
+        client.update_borrow_rate(&400);
+
+        client.deposit_collateral(&user, &100_000_0000000);
+        client.borrow(&user, &1_000_0000000);
+        advance(&env, SPAN);
+
+        let owed = client.get_position(&user).1;
+        StellarAssetClient::new(&env, &native_id).mint(&user, &owed);
+        client.repay(&user, &owed);
+
+        let accrued = client.total_accrued_interest();
+        assert!(accrued > 0, "nothing accrued to settle");
+
+        let vault_before = token::Client::new(&env, &native_id).balance(&vault_id);
+        let sent = client.settle_interest();
+
+        // 80% reaches the vault, the rest stays as protocol revenue.
+        assert_eq!(sent, accrued * 8000 / 10_000);
+        assert_eq!(
+            token::Client::new(&env, &native_id).balance(&vault_id) - vault_before,
+            sent,
+            "interest did not reach the vault"
+        );
+        assert!(client.total_accrued_interest() < accrued);
+        let _ = &vault;
+    }
+
+    #[test]
+    fn settling_with_nothing_accrued_is_a_no_op() {
+        let (env, contract_id, _, _, _, _, _, _) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        assert_eq!(client.settle_interest(), 0);
     }
 
     #[test]

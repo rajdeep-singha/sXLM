@@ -1226,3 +1226,53 @@ mod test {
         assert_eq!(f.vault.is_paused(), false);
     }
 }
+
+#[cfg(test)]
+mod storage_key_encoding {
+    use super::*;
+    use soroban_sdk::testutils::storage::Instance;
+    use soroban_sdk::{Env, TryFromVal};
+    use soroban_sdk::xdr::{ScVal, ScVec};
+
+    /// Upgrading a live contract keeps its storage, so whether this migration is
+    /// safe turns on how a `contracttype` enum encodes its key: by variant NAME
+    /// or by variant INDEX.
+    ///
+    /// Index encoding would be catastrophic here. The removed `TotalXlmStaked`
+    /// sat at index 3, which `DeployedToStrategies` now occupies, so an upgraded
+    /// vault would read 68.75 XLM as funds deployed to a strategy and price
+    /// every share against money that is not there.
+    #[test]
+    fn data_keys_are_addressed_by_name_not_index() {
+        let env = Env::default();
+        let id = env.register_contract(None, VaultContract);
+
+        env.as_contract(&id, || {
+            env.storage().instance().set(&DataKey::DeployedToStrategies, &7i128);
+        });
+
+        let found_by_name = env.as_contract(&id, || {
+            let mut found = false;
+            for (k, _) in env.storage().instance().all().iter() {
+                let sc = ScVal::try_from_val(&env, &k).expect("key converts to ScVal");
+                if let ScVal::Vec(Some(ScVec(items))) = sc {
+                    if let Some(ScVal::Symbol(sym)) = items.first() {
+                        if sym.as_slice() == b"DeployedToStrategies" {
+                            found = true;
+                        }
+                    } else {
+                        panic!("storage key does not start with a symbol");
+                    }
+                } else {
+                    panic!("storage key is not a vec");
+                }
+            }
+            found
+        });
+
+        assert!(
+            found_by_name,
+            "keys are index-addressed, not name-addressed — the upgrade would corrupt storage"
+        );
+    }
+}

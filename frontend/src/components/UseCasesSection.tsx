@@ -46,9 +46,9 @@ export default function UseCasesSection() {
               DeFi Integration
             </h3>
             <p className="text-black/70 text-base max-w-md mb-8 leading-relaxed">
-              Lift protocol efficiency by integrating sXLM — a yield-bearing
-              Stellar staking token that lets your users earn passive rewards
-              while remaining fully liquid and composable.
+              Integrate sXLM — a share token backed by pooled XLM, usable as
+              collateral in the lending market and in the XLM/sXLM pool while
+              staying redeemable at the vault rate.
             </p>
             <Link
               to="/lending"
