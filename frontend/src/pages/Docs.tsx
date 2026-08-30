@@ -548,7 +548,7 @@ function DocContent() {
           ))}
         </div>
         <P>
-          <strong className="text-black font-medium">sXLM earns what the protocol itself collects, and nothing else.</strong> Four sources,
+          <strong className="text-black font-medium">sXLM earns what the protocol itself collects, and nothing else.</strong> Five sources,
           none of them external:
         </P>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-4">
@@ -557,6 +557,7 @@ function DocContent() {
             ['Swap fees', 'A 5 bps protocol cut on XLM/sXLM swaps, split the same way. The 30 bps trading fee stays with liquidity providers.'],
             ['Withdrawal fee', '10 bps on exit, kept by the vault rather than taken as revenue. It is paid by whoever leaves to whoever stays, which is the right way round — leaving is what consumes liquidity.'],
             ['Flash loan fees', '5 bps to borrow idle XLM for the length of one transaction. No credit risk: if it is not returned with the fee, the whole transaction reverts.'],
+            ['Liquidation surcharge', '1% paid by the liquidator on top of the debt. Taken from their 5% seizure bonus, never from the borrower\u2019s collateral, and capped below that bonus so liquidating always pays.'],
           ].map(([title, desc]) => (
             <div key={title} className="card p-4">
               <p className="font-medium text-black text-sm mb-1">{title}</p>
@@ -565,7 +566,7 @@ function DocContent() {
           ))}
         </div>
         <P>
-          All four scale with <strong className="text-black font-medium">activity, not deposits</strong> — borrowing, trading, churn and
+          All five scale with <strong className="text-black font-medium">activity, not deposits</strong> — borrowing, trading, churn and
           arbitrage. With little of any, they are close to zero. Depositing more XLM does not increase them.
         </P>
       </section>

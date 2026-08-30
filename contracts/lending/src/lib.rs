@@ -23,6 +23,14 @@ const SECONDS_PER_LEDGER: i128 = 5;
 /// Share of interest that reaches sXLM holders. The rest is protocol revenue.
 const DEFAULT_VAULT_SHARE_BPS: i128 = 8000; // 80%
 
+/// Surcharge a liquidator pays on top of the debt, passed to the vault.
+///
+/// Taken from the liquidator's profit rather than the borrower's collateral, so
+/// it does not deepen anyone's loss. At 100 bps against a 500 bps seizure bonus
+/// the liquidator still nets 4%, which is at the healthy end of the range, so
+/// the incentive to keep positions solvent survives.
+const DEFAULT_LIQUIDATION_FEE_BPS: i128 = 100; // 1%
+
 // ---------- TTL constants ----------
 // Testnet: ~5s per ledger
 // 30 days  ≈  518_400 ledgers
@@ -55,6 +63,8 @@ pub enum DataKey {
     InterestAccrued,
     /// Vault share of interest, in basis points. The remainder is protocol fee.
     VaultShareBps,
+    /// Surcharge paid by a liquidator, passed to the vault.
+    LiquidationFeeBps,
     /// Address of the vault contract. The sXLM price is read from it rather
     /// than stored here, so no admin can set the number this contract values
     /// collateral at.
@@ -185,6 +195,13 @@ fn read_borrow_index(env: &Env) -> i128 {
         .instance()
         .get(&DataKey::BorrowIndex)
         .unwrap_or(RATE_PRECISION)
+}
+
+fn read_liquidation_fee_bps(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::LiquidationFeeBps)
+        .unwrap_or(DEFAULT_LIQUIDATION_FEE_BPS)
 }
 
 fn read_vault_share_bps(env: &Env) -> i128 {
@@ -443,6 +460,10 @@ impl LendingContract {
         } else if key == soroban_sdk::symbol_short!("bor_rate") {
             assert!(value >= 0 && value <= BPS_DENOMINATOR, "borrow rate out of range");
             env.storage().instance().set(&DataKey::BorrowRateBps, &value);
+        } else if key == soroban_sdk::symbol_short!("liq_fee") {
+            // Capped below the seizure bonus so liquidating always pays.
+            assert!(value >= 0 && value < read_liquidation_bonus(&env), "liquidation fee too high");
+            env.storage().instance().set(&DataKey::LiquidationFeeBps, &value);
         } else if key == soroban_sdk::symbol_short!("vlt_share") {
             assert!(value >= 0 && value <= BPS_DENOMINATOR, "vault share out of range");
             env.storage().instance().set(&DataKey::VaultShareBps, &value);
@@ -654,6 +675,15 @@ impl LendingContract {
         let native_client = token::Client::new(&env, &native);
         native_client.transfer(&liquidator, &env.current_contract_address(), &borrowed);
 
+        // Surcharge on top of the debt, straight to the vault. It comes out of
+        // the liquidator's bonus, never out of the borrower's collateral.
+        let liq_fee = borrowed * read_liquidation_fee_bps(&env) / BPS_DENOMINATOR;
+        if liq_fee > 0 {
+            if let Some(vault) = read_vault(&env) {
+                native_client.transfer(&liquidator, &vault, &liq_fee);
+            }
+        }
+
         // Liquidator receives sXLM worth (debt + 5% bonus) in XLM value
         // sxlm_to_seize = borrowed * (1 + bonus_bps/BPS) * RATE_PRECISION / exchange_rate
         //
@@ -733,6 +763,11 @@ impl LendingContract {
         extend_instance(&env);
         accrue_interest(&env);
         read_borrow_index(&env)
+    }
+
+    pub fn get_liquidation_fee_bps(env: Env) -> i128 {
+        extend_instance(&env);
+        read_liquidation_fee_bps(&env)
     }
 
     pub fn get_vault_share_bps(env: Env) -> i128 {
@@ -1197,6 +1232,53 @@ mod test {
         let (env, contract_id, _, _, _, _, _, _) = setup_with_vault();
         let client = LendingContractClient::new(&env, &contract_id);
         assert_eq!(client.settle_interest(), 0);
+    }
+
+    /// The surcharge reaches the vault, and comes out of the liquidator's
+    /// bonus rather than the borrower's collateral.
+    #[test]
+    fn liquidation_surcharge_reaches_the_vault() {
+        let (env, contract_id, sxlm_id, native_id, user, liquidator, _, vault_id) =
+            setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        let vault = MockVaultClient::new(&env, &vault_id);
+
+        client.deposit_collateral(&user, &10_000_000_000);
+        client.borrow(&user, &6_900_000_000); // just under the 70% limit
+
+        // Collateral loses value until the position is liquidatable.
+        vault.set_rate(&8_000_000);
+
+        let native = token::Client::new(&env, &native_id);
+        let vault_before = native.balance(&vault_id);
+        let borrower_collateral_before = client.get_position(&user).0;
+
+        client.liquidate(&liquidator, &user);
+
+        let to_vault = native.balance(&vault_id) - vault_before;
+        let expected = 6_900_000_000i128 * client.get_liquidation_fee_bps() / 10_000;
+        assert_eq!(to_vault, expected, "surcharge did not reach the vault");
+        assert!(to_vault > 0);
+
+        // The borrower's side is untouched by the surcharge: seizure is still
+        // priced off the bonus alone.
+        let seized = borrower_collateral_before - client.get_position(&user).0;
+        let priced_at_bonus = 6_900_000_000i128 * (10_000 + client.get_liquidation_bonus())
+            / 10_000 * RATE_PRECISION / 8_000_000;
+        assert!(
+            (seized - priced_at_bonus).abs() <= 2 || seized == borrower_collateral_before,
+            "surcharge was taken out of the borrower's collateral"
+        );
+        let _ = &sxlm_id;
+    }
+
+    #[test]
+    #[should_panic(expected = "liquidation fee too high")]
+    fn the_surcharge_cannot_exceed_the_bonus() {
+        let (env, contract_id, _, _, _, _, _, _) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        // Bonus is 500 bps; anything at or above it makes liquidating a loss.
+        client.set_param(&symbol_short!("liq_fee"), &500);
     }
 
     #[test]
