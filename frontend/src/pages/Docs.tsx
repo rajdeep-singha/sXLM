@@ -548,10 +548,25 @@ function DocContent() {
           ))}
         </div>
         <P>
-          <strong className="text-black font-medium">sXLM earns only what borrowers pay.</strong> Interest accrues on open loans and
-          80% of it is passed to the vault, raising the exchange rate for every holder; the remainder is protocol
-          revenue. With little borrowed, that is close to zero. This is a real yield source but a small and cyclical
-          one — it depends on people wanting to borrow XLM, which is not something the protocol controls.
+          <strong className="text-black font-medium">sXLM earns what the protocol itself collects, and nothing else.</strong> Four sources,
+          none of them external:
+        </P>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-4">
+          {[
+            ['Borrow interest', 'Accrues on open loans against a rising index. 80% is transferred to the vault, the rest is protocol revenue.'],
+            ['Swap fees', 'A 5 bps protocol cut on XLM/sXLM swaps, split the same way. The 30 bps trading fee stays with liquidity providers.'],
+            ['Withdrawal fee', '10 bps on exit, kept by the vault rather than taken as revenue. It is paid by whoever leaves to whoever stays, which is the right way round — leaving is what consumes liquidity.'],
+            ['Flash loan fees', '5 bps to borrow idle XLM for the length of one transaction. No credit risk: if it is not returned with the fee, the whole transaction reverts.'],
+          ].map(([title, desc]) => (
+            <div key={title} className="card p-4">
+              <p className="font-medium text-black text-sm mb-1">{title}</p>
+              <p className="text-xs text-black/60 leading-relaxed">{desc}</p>
+            </div>
+          ))}
+        </div>
+        <P>
+          All four scale with <strong className="text-black font-medium">activity, not deposits</strong> — borrowing, trading, churn and
+          arbitrage. With little of any, they are close to zero. Depositing more XLM does not increase them.
         </P>
       </section>
 

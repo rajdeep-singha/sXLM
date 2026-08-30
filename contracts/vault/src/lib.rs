@@ -19,6 +19,16 @@ const BPS_DENOMINATOR: i128 = 10_000;
 /// price can never be manipulated by donating to an empty vault.
 const MINIMUM_LIQUIDITY: i128 = 1000;
 
+/// Fee on withdrawal, kept by the vault.
+///
+/// This is not protocol revenue. It stays in the pool, so it is a transfer from
+/// whoever is leaving to whoever stays — which is the right way round, because
+/// leaving is what consumes the vault's liquidity.
+const DEFAULT_WITHDRAWAL_FEE_BPS: i128 = 10; // 0.10%
+
+/// Fee on a flash loan, also kept by the vault.
+const DEFAULT_FLASH_FEE_BPS: i128 = 5; // 0.05%
+
 // ---------- TTL constants ----------
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 100_800;   // ~7 days
 const INSTANCE_BUMP_AMOUNT: u32        = 518_400;    // bump to ~30 days
@@ -51,6 +61,12 @@ pub enum DataKey {
     Governance,
     /// Protocol fee, storage-backed so governance can move it.
     ProtocolFeeBps,
+    /// Fee charged on withdrawal, kept by the vault rather than paid out.
+    WithdrawalFeeBps,
+    /// Fee charged on a flash loan, in basis points.
+    FlashFeeBps,
+    /// Set while a flash loan is outstanding, to block reentry.
+    FlashLoanActive,
 }
 
 #[derive(Clone)]
@@ -97,6 +113,29 @@ fn read_sxlm_token(env: &Env) -> Address {
 
 fn read_native_token(env: &Env) -> Address {
     env.storage().instance().get(&DataKey::NativeToken).unwrap()
+}
+
+fn read_withdrawal_fee_bps(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::WithdrawalFeeBps)
+        .unwrap_or(DEFAULT_WITHDRAWAL_FEE_BPS)
+}
+
+fn read_flash_fee_bps(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::FlashFeeBps)
+        .unwrap_or(DEFAULT_FLASH_FEE_BPS)
+}
+
+/// Refuse anything that changes share supply or vault assets while a flash loan
+/// is outstanding. Without this, a borrower could "repay" by depositing the
+/// borrowed XLM, restoring the balance while minting themselves shares.
+fn require_no_flash_loan(env: &Env) {
+    if env.storage().instance().get(&DataKey::FlashLoanActive).unwrap_or(false) {
+        panic!("reentrant call during flash loan");
+    }
 }
 
 fn read_protocol_fee_bps(env: &Env) -> i128 {
@@ -295,6 +334,7 @@ impl VaultContract {
 
     /// Deposit XLM and receive sXLM tokens.
     pub fn deposit(env: Env, user: Address, xlm_amount: i128) {
+        require_no_flash_loan(&env);
         require_not_paused(&env);
         user.require_auth();
         if xlm_amount <= 0 {
@@ -351,6 +391,7 @@ impl VaultContract {
 
     /// Request withdrawal: burns sXLM and returns XLM.
     pub fn request_withdrawal(env: Env, user: Address, sxlm_amount: i128) {
+        require_no_flash_loan(&env);
         require_not_paused(&env);
         user.require_auth();
         if sxlm_amount <= 0 {
@@ -365,7 +406,11 @@ impl VaultContract {
             panic!("no sXLM in circulation");
         }
 
-        let xlm_to_return = sxlm_amount * assets / supply;
+        let gross = sxlm_amount * assets / supply;
+        // The fee is simply not paid out, so it stays as vault assets and lifts
+        // the rate for everyone who did not leave.
+        let fee = gross * read_withdrawal_fee_bps(&env) / BPS_DENOMINATOR;
+        let xlm_to_return = gross - fee;
         if xlm_to_return <= 0 {
             panic!("return amount too small");
         }
@@ -415,6 +460,7 @@ impl VaultContract {
 
     /// Claim a delayed withdrawal after cooldown has expired.
     pub fn claim_withdrawal(env: Env, user: Address, withdrawal_id: u64) {
+        require_no_flash_loan(&env);
         user.require_auth();
         extend_instance(&env);
 
@@ -533,6 +579,54 @@ impl VaultContract {
     // Liquidity
     // ==========================================================
 
+    /// Lend idle XLM for the length of one transaction.
+    ///
+    /// The receiver is called once and must return the amount plus the fee
+    /// before this function returns. There is no credit risk: if the balance is
+    /// not restored the assertion fails and the whole transaction reverts, loan
+    /// included. The fee stays in the vault, so it raises the exchange rate.
+    ///
+    /// Deposits, withdrawals and claims are blocked for the duration. Without
+    /// that, a borrower could satisfy the balance check by depositing the
+    /// borrowed XLM and mint themselves shares out of the loan.
+    pub fn flash_loan(env: Env, receiver: Address, amount: i128) {
+        require_not_paused(&env);
+        require_no_flash_loan(&env);
+        if amount <= 0 {
+            panic!("loan amount must be positive");
+        }
+        extend_instance(&env);
+
+        // Lend only what is not already spoken for by the withdrawal queue or
+        // accrued fees.
+        let available = unencumbered_balance(&env);
+        if amount > available {
+            panic!("insufficient unencumbered balance");
+        }
+
+        let fee = amount * read_flash_fee_bps(&env) / BPS_DENOMINATOR;
+        let native_token_addr = read_native_token(&env);
+        let xlm_client = token::Client::new(&env, &native_token_addr);
+        let balance_before = xlm_client.balance(&env.current_contract_address());
+
+        env.storage().instance().set(&DataKey::FlashLoanActive, &true);
+        xlm_client.transfer(&env.current_contract_address(), &receiver, &amount);
+
+        FlashLoanReceiverClient::new(&env, &receiver).on_flash_loan(&amount, &fee);
+
+        let balance_after = xlm_client.balance(&env.current_contract_address());
+        env.storage().instance().set(&DataKey::FlashLoanActive, &false);
+
+        if balance_after < balance_before + fee {
+            panic!("flash loan not repaid with fee");
+        }
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("flash"),),
+            (receiver, amount, fee),
+        );
+    }
+
     /// Donate XLM to the vault with no shares minted in return.
     ///
     /// No separate buffer counter: the donated XLM is part of the balance, so it
@@ -589,6 +683,12 @@ impl VaultContract {
         if key == soroban_sdk::symbol_short!("cooldown") {
             assert!(value >= 0 && value <= u32::MAX as i128, "cooldown out of range");
             env.storage().instance().set(&DataKey::CooldownPeriod, &(value as u32));
+        } else if key == soroban_sdk::symbol_short!("wd_fee") {
+            assert!(value >= 0 && value <= 500, "withdrawal fee out of range");
+            write_i128(&env, &DataKey::WithdrawalFeeBps, value);
+        } else if key == soroban_sdk::symbol_short!("flash_fee") {
+            assert!(value >= 0 && value <= 500, "flash fee out of range");
+            write_i128(&env, &DataKey::FlashFeeBps, value);
         } else if key == soroban_sdk::symbol_short!("fee_bps") {
             assert!(value >= 0 && value <= BPS_DENOMINATOR, "fee out of range");
             write_i128(&env, &DataKey::ProtocolFeeBps, value);
@@ -697,6 +797,16 @@ impl VaultContract {
         is_paused(&env)
     }
 
+    pub fn withdrawal_fee_bps(env: Env) -> i128 {
+        extend_instance(&env);
+        read_withdrawal_fee_bps(&env)
+    }
+
+    pub fn flash_fee_bps(env: Env) -> i128 {
+        extend_instance(&env);
+        read_flash_fee_bps(&env)
+    }
+
     pub fn protocol_fee_bps(env: Env) -> i128 {
         extend_instance(&env);
         read_protocol_fee_bps(&env)
@@ -728,6 +838,13 @@ impl VaultContract {
 }
 
 use soroban_sdk::contractclient;
+
+/// Implemented by anything that takes a flash loan. The callback must return
+/// `amount + fee` to the vault before it returns.
+#[contractclient(name = "FlashLoanReceiverClient")]
+pub trait FlashLoanReceiver {
+    fn on_flash_loan(env: Env, amount: i128, fee: i128);
+}
 
 #[contractclient(name = "SxlmTokenClient")]
 pub trait SxlmTokenInterface {
@@ -814,6 +931,68 @@ mod test {
         }
     }
 
+    mod honest {
+        use super::*;
+        /// Returns the loan plus the fee, as a borrower should.
+        #[contract]
+        pub struct HonestBorrower;
+
+        #[contractimpl]
+        impl HonestBorrower {
+            pub fn init(env: Env, token: Address, vault: Address) {
+                env.storage().instance().set(&symbol_short!("TOK"), &token);
+                env.storage().instance().set(&symbol_short!("VLT"), &vault);
+            }
+            pub fn on_flash_loan(env: Env, amount: i128, fee: i128) {
+                let token: Address =
+                    env.storage().instance().get(&symbol_short!("TOK")).unwrap();
+                let vault: Address =
+                    env.storage().instance().get(&symbol_short!("VLT")).unwrap();
+                token::Client::new(&env, &token).transfer(
+                    &env.current_contract_address(),
+                    &vault,
+                    &(amount + fee),
+                );
+            }
+        }
+    }
+
+    mod deadbeat {
+        use super::*;
+        /// Keeps the money.
+        #[contract]
+        pub struct Deadbeat;
+
+        #[contractimpl]
+        impl Deadbeat {
+            pub fn on_flash_loan(_env: Env, _amount: i128, _fee: i128) {}
+        }
+    }
+
+    mod attacker {
+        use super::*;
+        /// Tries to settle the loan by depositing it back for shares.
+        #[contract]
+        pub struct DepositAttacker;
+
+        #[contractimpl]
+        impl DepositAttacker {
+            pub fn init(env: Env, vault: Address) {
+                env.storage().instance().set(&symbol_short!("VLT"), &vault);
+            }
+            pub fn on_flash_loan(env: Env, amount: i128, _fee: i128) {
+                let vault: Address =
+                    env.storage().instance().get(&symbol_short!("VLT")).unwrap();
+                VaultContractClient::new(&env, &vault)
+                    .deposit(&env.current_contract_address(), &amount);
+            }
+        }
+    }
+
+    use attacker::{DepositAttacker, DepositAttackerClient};
+    use deadbeat::Deadbeat;
+    use honest::{HonestBorrower, HonestBorrowerClient};
+
     struct Fixture<'a> {
         env: Env,
         vault: VaultContractClient<'a>,
@@ -879,9 +1058,9 @@ mod test {
         assert_eq!(shares, 100_0000000 - MINIMUM_LIQUIDITY);
 
         f.vault.request_withdrawal(&user, &shares);
-        // Paid instantly: the vault holds only the dead shares' backing.
+        // Paid instantly, less the withdrawal fee left for the dead shares.
         assert_eq!(f.sxlm.balance(&user), 0);
-        assert!(f.xlm.balance(&user) >= 99_9999000);
+        assert!(f.xlm.balance(&user) >= 99_8000000);
     }
 
     // ------------------------------------------------------------------
@@ -947,10 +1126,9 @@ mod test {
         f.vault.request_withdrawal(&alice, &(alice_shares / 2));
         let rate_after = f.vault.get_exchange_rate();
 
-        assert!(
-            (rate_after - rate_before).abs() <= 2,
-            "exchange rate moved on a withdrawal"
-        );
+        // A withdrawal may lift the rate by the fee it leaves behind, and must
+        // never lower it.
+        assert!(rate_after >= rate_before, "a withdrawal lowered the rate");
     }
 
     #[test]
@@ -1126,6 +1304,143 @@ mod test {
     }
 
     // ------------------------------------------------------------------
+    // Withdrawal fee
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn the_withdrawal_fee_stays_with_the_holders_who_remain() {
+        let env = Env::default();
+        let f = setup(&env);
+
+        let leaver = funded_user(&f, 100_0000000);
+        let stayer = funded_user(&f, 100_0000000);
+        f.vault.deposit(&leaver, &100_0000000);
+        f.vault.deposit(&stayer, &100_0000000);
+
+        let rate_before = f.vault.get_exchange_rate();
+        let shares = f.sxlm.balance(&leaver);
+        let paid_out_before = f.xlm.balance(&leaver);
+
+        f.vault.request_withdrawal(&leaver, &shares);
+        let received = f.xlm.balance(&leaver) - paid_out_before;
+
+        // The leaver is short by the fee...
+        let gross = shares * rate_before / RATE_PRECISION;
+        let expected_fee = gross * f.vault.withdrawal_fee_bps() / 10_000;
+        assert!(
+            (gross - received - expected_fee).abs() <= 2,
+            "fee charged was not the fee configured"
+        );
+
+        // ...and that shortfall is exactly what lifts the remaining shares.
+        assert!(
+            f.vault.get_exchange_rate() > rate_before,
+            "the fee did not reach the holders who stayed"
+        );
+    }
+
+    #[test]
+    fn a_zero_withdrawal_fee_pays_out_in_full() {
+        let env = Env::default();
+        let f = setup(&env);
+        f.vault.set_param(&symbol_short!("wd_fee"), &0);
+
+        let user = funded_user(&f, 100_0000000);
+        f.vault.deposit(&user, &100_0000000);
+        let rate = f.vault.get_exchange_rate();
+        let shares = f.sxlm.balance(&user);
+        let before = f.xlm.balance(&user);
+
+        f.vault.request_withdrawal(&user, &shares);
+        let received = f.xlm.balance(&user) - before;
+        assert!((received - shares * rate / RATE_PRECISION).abs() <= 2);
+    }
+
+    // ------------------------------------------------------------------
+    // Flash loans
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn a_repaid_flash_loan_lifts_the_rate() {
+        let env = Env::default();
+        let f = setup(&env);
+
+        let user = funded_user(&f, 100_0000000);
+        f.vault.deposit(&user, &100_0000000);
+        let rate_before = f.vault.get_exchange_rate();
+
+        let borrower = env.register_contract(None, HonestBorrower);
+        // Give the borrower enough to cover the fee.
+        f.xlm_admin.mint(&borrower, &1_0000000);
+        HonestBorrowerClient::new(&env, &borrower).init(&f.xlm.address, &f.vault_id);
+
+        f.vault.flash_loan(&borrower, &50_0000000);
+
+        assert!(
+            f.vault.get_exchange_rate() > rate_before,
+            "the flash loan fee did not reach holders"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "flash loan not repaid with fee")]
+    fn an_unrepaid_flash_loan_reverts() {
+        let env = Env::default();
+        let f = setup(&env);
+        let user = funded_user(&f, 100_0000000);
+        f.vault.deposit(&user, &100_0000000);
+
+        let thief = env.register_contract(None, Deadbeat);
+        f.vault.flash_loan(&thief, &50_0000000);
+    }
+
+    /// The attack the reentrancy guard exists for: repay the loan by depositing
+    /// it, restoring the balance while minting yourself shares out of thin air.
+    /// A panic message does not survive a cross-contract call, so this asserts
+    /// only that the attack reverts. `depositing_during_a_flash_loan_is_refused`
+    /// below pins the reason.
+    #[test]
+    #[should_panic]
+    fn a_flash_loan_cannot_be_repaid_by_depositing_it() {
+        let env = Env::default();
+        let f = setup(&env);
+        let user = funded_user(&f, 100_0000000);
+        f.vault.deposit(&user, &100_0000000);
+
+        let attacker = env.register_contract(None, DepositAttacker);
+        DepositAttackerClient::new(&env, &attacker).init(&f.vault_id);
+        f.vault.flash_loan(&attacker, &50_0000000);
+    }
+
+    #[test]
+    #[should_panic(expected = "reentrant call during flash loan")]
+    fn depositing_during_a_flash_loan_is_refused() {
+        let env = Env::default();
+        let f = setup(&env);
+        let user = funded_user(&f, 100_0000000);
+        f.vault.deposit(&user, &100_0000000);
+
+        // Stand in for the state mid-loan.
+        env.as_contract(&f.vault_id, || {
+            env.storage().instance().set(&DataKey::FlashLoanActive, &true);
+        });
+
+        f.vault.deposit(&user, &10_0000000);
+    }
+
+    #[test]
+    #[should_panic(expected = "insufficient unencumbered balance")]
+    fn a_flash_loan_cannot_exceed_free_balance() {
+        let env = Env::default();
+        let f = setup(&env);
+        let user = funded_user(&f, 100_0000000);
+        f.vault.deposit(&user, &100_0000000);
+
+        let borrower = env.register_contract(None, HonestBorrower);
+        f.vault.flash_loan(&borrower, &500_0000000);
+    }
+
+    // ------------------------------------------------------------------
     // Invariants across a long sequence
     // ------------------------------------------------------------------
 
@@ -1160,8 +1475,8 @@ mod test {
             if shares > 2 {
                 f.vault.request_withdrawal(user, &(shares / 3));
                 let after = f.vault.get_exchange_rate();
-                assert!(after >= rate - 1, "withdrawal dropped the rate");
-                assert!(after <= rate + 1, "withdrawal raised the rate");
+                // Only the withdrawal fee may lift it, and nothing may drop it.
+                assert!(after >= rate, "withdrawal dropped the rate");
                 rate = after;
             }
         }

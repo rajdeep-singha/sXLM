@@ -24,8 +24,11 @@ pub enum DataKey {
     LpBalance(Address),
     ProtocolFeeBps,
     AccruedProtocolFees,
-    /// Vault address, used to sanity-check the ratio the pool is seeded at.
+    /// Vault address. Used to check the seed ratio, and as the destination for
+    /// the vault's share of protocol fees.
     Vault,
+    /// Share of protocol fees passed to the vault, in basis points.
+    VaultShareBps,
 }
 
 // --- Storage helpers ---
@@ -107,6 +110,9 @@ fn isqrt(n: i128) -> i128 {
 
 /// How far the seeded ratio may sit from the vault rate, in basis points.
 const SEED_TOLERANCE_BPS: i128 = 200; // 2%
+
+/// Share of collected protocol fees that reaches sXLM holders.
+const DEFAULT_VAULT_SHARE_BPS: i128 = 8000; // 80%
 
 /// Reject an opening deposit that prices sXLM far from what the vault says a
 /// share is worth. Skipped when no vault is configured, which is only the case
@@ -371,24 +377,54 @@ impl LpPoolContract {
     // ==========================================================
 
     /// Collect accrued protocol fees. Admin-only. Transfers XLM to admin and resets counter.
+    /// Sweep accrued protocol fees.
+    ///
+    /// The vault's share is transferred to it directly — the vault derives its
+    /// assets from its own balance, so XLM arriving raises the exchange rate for
+    /// every sXLM holder without a call. The remainder goes to the admin as
+    /// protocol revenue.
+    ///
+    /// Callable by anyone: it only moves fees to their two fixed destinations.
     pub fn collect_protocol_fees(env: Env) -> i128 {
-        let admin = read_admin(&env);
-        admin.require_auth();
         extend_instance(&env);
 
         let accrued = read_i128(&env, &DataKey::AccruedProtocolFees);
         if accrued <= 0 {
             return 0;
         }
-
-        let native = read_native_token(&env);
-        token::Client::new(&env, &native).transfer(&env.current_contract_address(), &admin, &accrued);
-
         write_i128(&env, &DataKey::AccruedProtocolFees, 0);
 
+        let native = read_native_token(&env);
+        let native_client = token::Client::new(&env, &native);
+
+        let share_bps: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::VaultShareBps)
+            .unwrap_or(DEFAULT_VAULT_SHARE_BPS);
+
+        let to_vault = match env.storage().instance().get::<DataKey, Address>(&DataKey::Vault) {
+            Some(vault) => {
+                let share = accrued * share_bps / 10_000;
+                if share > 0 {
+                    native_client.transfer(&env.current_contract_address(), &vault, &share);
+                }
+                share
+            }
+            // No vault configured yet: everything goes to the admin rather than
+            // being stranded.
+            None => 0,
+        };
+
+        let to_admin = accrued - to_vault;
+        if to_admin > 0 {
+            let admin = read_admin(&env);
+            native_client.transfer(&env.current_contract_address(), &admin, &to_admin);
+        }
+
         env.events().publish(
-            (soroban_sdk::symbol_short!("pf_col"),),
-            (admin, accrued),
+            (soroban_sdk::symbol_short!("fees_out"),),
+            (to_vault, to_admin),
         );
 
         accrued
@@ -596,6 +632,34 @@ mod test {
         assert_eq!(client.vault(), vault_id);
     }
 
+    /// Swap fees are the pool's second yield source for sXLM holders: the
+    /// vault's share is transferred straight to it, raising the exchange rate.
+    #[test]
+    fn protocol_fees_reach_the_vault() {
+        let (env, contract_id, _, native_id, user, admin, vault_id) = setup_with_vault();
+        let client = LpPoolContractClient::new(&env, &contract_id);
+        client.add_liquidity(&user, &10_000_0000000, &10_000_0000000);
+
+        // Swaps accrue a protocol cut on the input side.
+        client.swap_xlm_to_sxlm(&user, &1_000_0000000, &0);
+        let accrued = client.accrued_protocol_fees();
+        assert!(accrued > 0, "no protocol fee accrued on a swap");
+
+        let native = token::Client::new(&env, &native_id);
+        let vault_before = native.balance(&vault_id);
+        let admin_before = native.balance(&admin);
+
+        let collected = client.collect_protocol_fees();
+        assert_eq!(collected, accrued);
+
+        let to_vault = native.balance(&vault_id) - vault_before;
+        let to_admin = native.balance(&admin) - admin_before;
+
+        assert_eq!(to_vault, accrued * 8000 / 10_000, "vault share wrong");
+        assert_eq!(to_vault + to_admin, accrued, "fees went missing");
+        assert_eq!(client.accrued_protocol_fees(), 0);
+    }
+
     #[test]
     fn test_get_price() {
         let (env, contract_id, _, _, user, _) = setup_test();
@@ -662,7 +726,8 @@ mod test {
         let admin_balance_after = token::Client::new(&env, &native_id).balance(&admin);
 
         assert_eq!(collected, accrued);
-        assert_eq!(admin_balance_after - admin_balance_before, accrued);
+        // The admin keeps the protocol share; the rest goes to sXLM holders.
+        assert_eq!(admin_balance_after - admin_balance_before, accrued * 2000 / 10_000);
         assert_eq!(client.accrued_protocol_fees(), 0);
     }
 
