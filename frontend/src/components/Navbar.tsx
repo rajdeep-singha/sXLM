@@ -6,6 +6,7 @@ import WalletButton from './WalletButton';
 
 const NAV_LINKS = [
   { path: '/stake',      label: 'Stake'      },
+  { path: '/withdraw',   label: 'Withdraw'   },
   { path: '/lending',    label: 'Earn'       },
   { path: '/governance', label: 'Governance' },
   { path: '/docs',       label: 'Docs'       },

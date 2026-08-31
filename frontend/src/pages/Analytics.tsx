@@ -9,6 +9,45 @@ type TimeRange = '7d' | '30d' | '90d';
 
 const STROKE = '#000';
 
+
+/**
+ * Charts render nothing when a series is empty, which reads as broken rather
+ * than as "no data yet". Say which it is.
+ */
+function ChartFrame({
+  data,
+  isLoading,
+  children,
+}: {
+  data: unknown[];
+  isLoading: boolean;
+  children: React.ReactElement;
+}) {
+  if (isLoading) {
+    return (
+      <div className="h-[220px] flex items-center justify-center text-xs text-gray-400">
+        Loading…
+      </div>
+    );
+  }
+  if (!data.length) {
+    return (
+      <div className="h-[220px] flex flex-col items-center justify-center gap-1 text-center px-4">
+        <p className="text-xs text-gray-500">No history recorded yet</p>
+        <p className="text-[10px] text-gray-400 max-w-[24ch]">
+          Charts are built from on-chain snapshots. Nothing is shown until there is
+          real movement to plot.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <ResponsiveContainer width="100%" height={220}>
+      {children}
+    </ResponsiveContainer>
+  );
+}
+
 export default function Analytics() {
   const { apyHistory, exchangeRateHistory, tvlHistory, totalStakedHistory, isLoading } = useProtocol();
   const [range, setRange] = useState<TimeRange>('30d');
@@ -73,7 +112,7 @@ export default function Analytics() {
         <div className="card p-5">
           <h3 className="text-xs font-medium mb-1 text-black">APY Over Time</h3>
           <p className="text-[10px] mb-4 text-gray-400">Annual percentage yield</p>
-          <ResponsiveContainer width="100%" height={220}>
+          <ChartFrame data={filterByRange(apyHistory)} isLoading={isLoading}>
             <LineChart data={filterByRange(apyHistory)}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#999' }} axisLine={false} tickLine={false} />
@@ -81,13 +120,13 @@ export default function Analytics() {
               <Tooltip contentStyle={tooltipStyle} labelStyle={{ color: '#666' }} formatter={(value: number) => [`${value.toFixed(2)}%`, 'APY']} />
               <Line type="monotone" dataKey="value" stroke={STROKE} strokeWidth={2} dot={false} />
             </LineChart>
-          </ResponsiveContainer>
+          </ChartFrame>
         </div>
 
         <div className="card p-5">
           <h3 className="text-xs font-medium mb-1 text-black">Exchange Rate</h3>
           <p className="text-[10px] mb-4 text-gray-400">1 sXLM in XLM</p>
-          <ResponsiveContainer width="100%" height={220}>
+          <ChartFrame data={filterByRange(exchangeRateHistory)} isLoading={isLoading}>
             <LineChart data={filterByRange(exchangeRateHistory)}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#999' }} axisLine={false} tickLine={false} />
@@ -95,13 +134,13 @@ export default function Analytics() {
               <Tooltip contentStyle={tooltipStyle} labelStyle={{ color: '#666' }} formatter={(value: number) => [value.toFixed(6), 'Rate']} />
               <Line type="monotone" dataKey="value" stroke={STROKE} strokeWidth={2} dot={false} />
             </LineChart>
-          </ResponsiveContainer>
+          </ChartFrame>
         </div>
 
         <div className="card p-5">
           <h3 className="text-xs font-medium mb-1 text-black">Total Value Locked</h3>
           <p className="text-[10px] mb-4 text-gray-400">USD equivalent</p>
-          <ResponsiveContainer width="100%" height={220}>
+          <ChartFrame data={filterByRange(tvlHistory)} isLoading={isLoading}>
             <AreaChart data={filterByRange(tvlHistory)}>
               <defs>
                 <linearGradient id="tvlGrad" x1="0" y1="0" x2="0" y2="1">
@@ -115,13 +154,13 @@ export default function Analytics() {
               <Tooltip contentStyle={tooltipStyle} labelStyle={{ color: '#666' }} formatter={(value: number) => [`$${value.toLocaleString()}`, 'TVL']} />
               <Area type="monotone" dataKey="value" stroke={STROKE} fill="url(#tvlGrad)" strokeWidth={2} />
             </AreaChart>
-          </ResponsiveContainer>
+          </ChartFrame>
         </div>
 
         <div className="card p-5">
           <h3 className="text-xs font-medium mb-1 text-black">Total XLM Staked</h3>
           <p className="text-[10px] mb-4 text-gray-400">Protocol deposits</p>
-          <ResponsiveContainer width="100%" height={220}>
+          <ChartFrame data={filterByRange(totalStakedHistory)} isLoading={isLoading}>
             <AreaChart data={filterByRange(totalStakedHistory)}>
               <defs>
                 <linearGradient id="stakedGrad" x1="0" y1="0" x2="0" y2="1">
@@ -135,7 +174,7 @@ export default function Analytics() {
               <Tooltip contentStyle={tooltipStyle} labelStyle={{ color: '#666' }} formatter={(value: number) => [`${value.toLocaleString()} XLM`, 'Staked']} />
               <Area type="monotone" dataKey="value" stroke={STROKE} fill="url(#stakedGrad)" strokeWidth={2} />
             </AreaChart>
-          </ResponsiveContainer>
+          </ChartFrame>
         </div>
       </div>
     </div>
