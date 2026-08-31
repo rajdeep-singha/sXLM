@@ -59,6 +59,32 @@ export interface ClaimResult {
   xlmReturned: bigint;
 }
 
+/**
+ * Read a Soroban return value out of transaction metadata.
+ *
+ * The metadata union gains a new arm with each protocol version — v3 under
+ * protocol 21, v4 from 23 onward — and calling the wrong accessor throws
+ * "Bad union switch" rather than returning nothing. Ask the discriminant
+ * first and fall back, so a protocol bump degrades to a missing value instead
+ * of a crash.
+ */
+function readReturnValue(meta: unknown): xdr.ScVal | undefined {
+  const m = meta as { switch?: () => { value: number }; v3?: () => unknown; v4?: () => unknown };
+  if (!m || typeof m.switch !== "function") return undefined;
+  try {
+    const arm = m.switch().value;
+    const soroban =
+      arm === 3 && typeof m.v3 === "function"
+        ? (m.v3() as { sorobanMeta?: () => { returnValue?: () => xdr.ScVal } | null })
+        : arm === 4 && typeof m.v4 === "function"
+          ? (m.v4() as { sorobanMeta?: () => { returnValue?: () => xdr.ScVal } | null })
+          : undefined;
+    return soroban?.sorobanMeta?.()?.returnValue?.();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function callDeposit(
   userPublicKey: string,
   xlmAmount: bigint
@@ -91,10 +117,7 @@ export async function callDeposit(
 
   const txResult = await pollTransaction(sendResult.hash);
 
-  const returnValue = txResult.resultMetaXdr
-    ?.v3()
-    ?.sorobanMeta()
-    ?.returnValue();
+  const returnValue = readReturnValue(txResult.resultMetaXdr);
 
   let sxlmMinted = BigInt(0);
   if (returnValue) {
@@ -144,10 +167,7 @@ export async function callRequestWithdrawal(
 
   const txResult = await pollTransaction(sendResult.hash);
 
-  const returnValue = txResult.resultMetaXdr
-    ?.v3()
-    ?.sorobanMeta()
-    ?.returnValue();
+  const returnValue = readReturnValue(txResult.resultMetaXdr);
 
   let withdrawalId = 0;
   let isInstant = false;
@@ -209,10 +229,7 @@ export async function callClaimWithdrawal(
 
   const txResult = await pollTransaction(sendResult.hash);
 
-  const returnValue = txResult.resultMetaXdr
-    ?.v3()
-    ?.sorobanMeta()
-    ?.returnValue();
+  const returnValue = readReturnValue(txResult.resultMetaXdr);
 
   let xlmReturned = BigInt(0);
   if (returnValue) {
