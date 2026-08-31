@@ -50,7 +50,7 @@ TOKEN_CONTRACT_ID=$(stellar contract deploy \
   --wasm "$TOKEN_WASM" \
   --source "$ACCOUNT" \
   --network "$NETWORK" \
-  2>&1)
+  )
 
 echo "  Token Contract ID: $TOKEN_CONTRACT_ID"
 
@@ -62,7 +62,7 @@ STAKING_CONTRACT_ID=$(stellar contract deploy \
   --wasm "$VAULT_WASM" \
   --source "$ACCOUNT" \
   --network "$NETWORK" \
-  2>&1)
+  )
 
 echo "  Vault Contract ID: $STAKING_CONTRACT_ID"
 
@@ -74,7 +74,7 @@ LENDING_CONTRACT_ID=$(stellar contract deploy \
   --wasm "$LENDING_WASM" \
   --source "$ACCOUNT" \
   --network "$NETWORK" \
-  2>&1)
+  )
 
 echo "  Lending Contract ID: $LENDING_CONTRACT_ID"
 
@@ -86,7 +86,7 @@ LP_POOL_CONTRACT_ID=$(stellar contract deploy \
   --wasm "$LP_POOL_WASM" \
   --source "$ACCOUNT" \
   --network "$NETWORK" \
-  2>&1)
+  )
 
 echo "  LP Pool Contract ID: $LP_POOL_CONTRACT_ID"
 
@@ -98,7 +98,7 @@ GOVERNANCE_CONTRACT_ID=$(stellar contract deploy \
   --wasm "$GOVERNANCE_WASM" \
   --source "$ACCOUNT" \
   --network "$NETWORK" \
-  2>&1)
+  )
 
 echo "  Governance Contract ID: $GOVERNANCE_CONTRACT_ID"
 
@@ -109,14 +109,14 @@ echo "[7/10] Resolving native XLM token (SAC) address..."
 NATIVE_TOKEN_ID=$(stellar contract id asset \
   --asset native \
   --network "$NETWORK" \
-  2>&1)
+  )
 
 echo "  Native XLM Token ID: $NATIVE_TOKEN_ID"
 
 # ---------------------------------------------------------------------------
 # Step 8: Get admin public key
 # ---------------------------------------------------------------------------
-ADMIN_PUB_KEY=$(stellar keys address "$ACCOUNT" 2>&1 || echo "")
+ADMIN_PUB_KEY=$(stellar keys address "$ACCOUNT" 2>/dev/null || echo "")
 
 if [ -z "$ADMIN_PUB_KEY" ]; then
   echo "WARNING: Could not resolve admin public key."
@@ -207,7 +207,7 @@ echo "  Governance contract initialized"
 # Write .env file
 # ---------------------------------------------------------------------------
 ENV_FILE="$SCRIPT_DIR/../.env"
-ADMIN_SECRET=$(stellar keys show "$ACCOUNT" 2>&1 || echo "")
+ADMIN_SECRET=$(stellar keys show "$ACCOUNT" 2>/dev/null || echo "")
 
 cat > "$ENV_FILE" <<EOF
 # ===========================================
@@ -219,7 +219,7 @@ cat > "$ENV_FILE" <<EOF
 STELLAR_NETWORK=testnet
 STELLAR_RPC_URL=https://soroban-testnet.stellar.org
 STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org
-STELLAR_NETWORK_PASSPHRASE=Test SDF Network ; September 2015
+STELLAR_NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
 
 # --- Contract IDs ---
 SXLM_TOKEN_CONTRACT_ID=$TOKEN_CONTRACT_ID

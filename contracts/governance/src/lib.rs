@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, String};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol};
 
 const BPS_DENOMINATOR: i128 = 10_000;
 const MIN_PROPOSAL_BALANCE: i128 = 100_0000000; // 100 sXLM minimum to create proposal
@@ -25,7 +25,7 @@ pub enum DataKey {
     /// sXLM escrowed by a voter for a proposal, returned after voting closes.
     VoteWeight(u64, Address),
     // Governable parameter storage (result of executed proposals)
-    Param(String),
+    Param(Symbol),
     /// Ledgers that must pass between voting closing and execution.
     ExecutionDelayLedgers,
 }
@@ -35,8 +35,10 @@ pub enum DataKey {
 pub struct Proposal {
     pub id: u64,
     pub proposer: Address,
-    pub param_key: String,
-    pub new_value: String,
+    /// Contract the approved change is applied to.
+    pub target: Address,
+    pub param_key: Symbol,
+    pub new_value: i128,
     pub votes_for: i128,
     pub votes_against: i128,
     pub start_ledger: u32,
@@ -209,8 +211,9 @@ impl GovernanceContract {
     pub fn create_proposal(
         env: Env,
         proposer: Address,
-        param_key: String,
-        new_value: String,
+        target: Address,
+        param_key: Symbol,
+        new_value: i128,
     ) -> u64 {
         proposer.require_auth();
         extend_instance(&env);
@@ -233,8 +236,9 @@ impl GovernanceContract {
         let proposal = Proposal {
             id,
             proposer: proposer.clone(),
+            target: target.clone(),
             param_key: param_key.clone(),
-            new_value: new_value.clone(),
+            new_value,
             votes_for: 0,
             votes_against: 0,
             start_ledger: current_ledger,
@@ -256,11 +260,9 @@ impl GovernanceContract {
 
     /// Vote on a proposal by escrowing sXLM for the length of the vote.
     ///
-    /// The previous build weighted votes by a live `balance()` call, so the
-    /// same tokens could be bought, voted with, and sold inside one ledger —
-    /// and could vote on every proposal at once. Escrow makes the voter hold
-    /// the position for the voting period instead of borrowing it for an
-    /// instant. Tokens are returned by `unlock_vote` once voting closes.
+    /// Weight is the amount escrowed, so the same shares cannot vote twice or
+    /// be sold in the same ledger they voted in. Returned by `unlock_vote` once
+    /// voting closes.
     pub fn vote(env: Env, voter: Address, proposal_id: u64, support: bool, amount: i128) {
         voter.require_auth();
         extend_instance(&env);
@@ -361,9 +363,7 @@ impl GovernanceContract {
         // it can take effect, which is the whole point of having one.
         assert!(current_ledger >= proposal.eta, "timelock has not elapsed");
 
-        // Quorum against the supply snapshot taken at creation. This check is
-        // unconditional: the previous build skipped it entirely whenever the
-        // admin-set reference supply was zero, which was its initial value.
+        // Quorum against the supply snapshot taken at creation. Unconditional.
         let total_votes = proposal.votes_for + proposal.votes_against;
         assert!(total_votes > 0, "no votes cast");
 
@@ -377,17 +377,22 @@ impl GovernanceContract {
             "proposal did not pass"
         );
 
-        // Store the approved parameter value on-chain
+        // Apply the change to the target contract. Marking the proposal executed
+        // first means a target that rejects the value cannot be retried in a
+        // loop, and a reverting call takes the whole transaction with it anyway.
+        proposal.executed = true;
+        write_proposal(&env, &proposal);
+
+        ParamTargetClient::new(&env, &proposal.target)
+            .set_param(&proposal.param_key, &proposal.new_value);
+
+        // Keep a local record of what was approved, for reading back.
         let param_key = DataKey::Param(proposal.param_key.clone());
-        env.storage().persistent().set(
-            &param_key,
-            &proposal.new_value,
-        );
+        env.storage().persistent().set(&param_key, &proposal.new_value);
         env.storage()
             .persistent()
             .extend_ttl(&param_key, PROPOSAL_LIFETIME_THRESHOLD, PROPOSAL_BUMP_AMOUNT);
 
-        proposal.executed = true;
         write_proposal(&env, &proposal);
 
         env.events().publish(
@@ -435,20 +440,18 @@ impl GovernanceContract {
         read_proposal(&env, id).eta
     }
 
-    /// Read an approved governance parameter value.
+    /// Read the last approved value for a parameter.
     ///
-    /// Note: no other contract reads these values yet. Executing a proposal
-    /// records the approved value here; applying it to the vault or the lending
-    /// market still requires those contracts to accept governance as their
-    /// admin, which is a mainnet ownership transfer and is deliberately not
-    /// bundled into this change.
-    pub fn get_param(env: Env, key: String) -> String {
+    /// This is a record, not the source of truth — execution applies the value
+    /// to the target contract, and that contract is what to read for the live
+    /// setting.
+    pub fn get_param(env: Env, key: Symbol) -> i128 {
         extend_instance(&env);
         let param_key = DataKey::Param(key);
-        let val: String = env.storage()
+        let val: i128 = env.storage()
             .persistent()
             .get(&param_key)
-            .unwrap_or(String::from_str(&env, ""));
+            .unwrap_or(0);
         // Extend TTL if it exists
         if env.storage().persistent().has(&param_key) {
             env.storage()
@@ -468,11 +471,17 @@ pub trait SxlmSupplyInterface {
     fn total_supply(env: Env) -> i128;
 }
 
+/// Every contract governance can configure implements this.
+#[contractclient(name = "ParamTargetClient")]
+pub trait ParamTargetInterface {
+    fn set_param(env: Env, key: Symbol, value: i128);
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use soroban_sdk::testutils::{Address as _, Ledger};
-    use soroban_sdk::{symbol_short, Env, Map, String};
+    use soroban_sdk::{symbol_short, Env, Map};
 
     /// sXLM stand-in: transferable like the real token and, unlike a Stellar
     /// asset contract, able to report total supply for the quorum check.
@@ -515,10 +524,30 @@ mod test {
         }
     }
 
+    /// Stand-in for a contract governance configures. Records what it was told
+    /// and refuses keys it does not know, exactly as the real ones do.
+    #[contract]
+    pub struct MockTarget;
+
+    #[contractimpl]
+    impl MockTarget {
+        pub fn set_param(env: Env, key: Symbol, value: i128) {
+            if key != symbol_short!("fee_bps") {
+                panic!("unknown parameter");
+            }
+            env.storage().instance().set(&symbol_short!("FEE"), &value);
+        }
+        pub fn fee(env: Env) -> i128 {
+            env.storage().instance().get(&symbol_short!("FEE")).unwrap_or(-1)
+        }
+    }
+
     struct Fixture<'a> {
         env: Env,
         gov: GovernanceContractClient<'a>,
         sxlm: MockSxlmClient<'a>,
+        target: MockTargetClient<'a>,
+        target_id: Address,
         proposer: Address,
         voter: Address,
     }
@@ -541,7 +570,10 @@ mod test {
         sxlm.mint(&proposer, &10_000_0000000);
         sxlm.mint(&voter, &5_000_0000000);
 
-        Fixture { env: env.clone(), gov, sxlm, proposer, voter }
+        let target_id = env.register_contract(None, MockTarget);
+        let target = MockTargetClient::new(env, &target_id);
+
+        Fixture { env: env.clone(), gov, sxlm, target, target_id, proposer, voter }
     }
 
     fn advance(env: &Env, ledgers: u32) {
@@ -549,11 +581,7 @@ mod test {
     }
 
     fn propose(f: &Fixture) -> u64 {
-        f.gov.create_proposal(
-            &f.proposer,
-            &String::from_str(&f.env, "collateral_factor"),
-            &String::from_str(&f.env, "7500"),
-        )
+        f.gov.create_proposal(&f.proposer, &f.target_id, &symbol_short!("fee_bps"), &750)
     }
 
     #[test]
@@ -590,9 +618,8 @@ mod test {
         assert_eq!(f.gov.get_vote_count(&id), (5_000_0000000, 0));
     }
 
-    /// The attack the old build allowed: weight came from a live balance read,
-    /// so shares could be voted and then moved on in the same ledger. Escrow
-    /// means the second voter simply does not have them.
+    /// Escrow means shares voted with are no longer transferable, so a second
+    /// voter cannot receive and reuse them.
     #[test]
     #[should_panic(expected = "insufficient balance")]
     fn the_same_shares_cannot_vote_twice() {
@@ -666,15 +693,14 @@ mod test {
         advance(&env, 151);
         f.gov.execute_proposal(&id);
 
-        assert_eq!(
-            f.gov.get_param(&String::from_str(&env, "collateral_factor")),
-            String::from_str(&env, "7500")
-        );
+        // The approved value reached the target contract, not just governance.
+        assert_eq!(f.target.fee(), 750);
+        assert_eq!(f.gov.get_param(&symbol_short!("fee_bps")), 750);
         assert!(f.gov.get_proposal(&id).executed);
     }
 
-    /// Quorum used to be skipped whenever the admin-set reference supply was
-    /// zero, which is what it was initialised to. It is now unconditional.
+    /// Quorum is measured against the creation-time supply snapshot and always
+    /// applies.
     #[test]
     #[should_panic(expected = "quorum not met")]
     fn quorum_is_enforced() {
@@ -704,12 +730,39 @@ mod test {
     }
 
     #[test]
-    fn unset_params_read_empty() {
+    fn unset_params_read_zero() {
         let env = Env::default();
         let f = setup(&env);
-        assert_eq!(
-            f.gov.get_param(&String::from_str(&env, "nothing")),
-            String::from_str(&env, "")
+        assert_eq!(f.gov.get_param(&symbol_short!("nothing")), 0);
+    }
+
+    /// A proposal naming a parameter the target does not have must fail loudly
+    /// at execution rather than appear to succeed.
+    #[test]
+    #[should_panic(expected = "unknown parameter")]
+    fn an_unknown_parameter_fails_at_execution() {
+        let env = Env::default();
+        let f = setup(&env);
+        let id = f.gov.create_proposal(
+            &f.proposer, &f.target_id, &symbol_short!("nonsense"), &1,
         );
+        f.gov.vote(&f.proposer, &id, &true, &10_000_0000000);
+        advance(&env, 151);
+        f.gov.execute_proposal(&id);
+    }
+
+    #[test]
+    fn the_target_is_untouched_until_the_timelock_passes() {
+        let env = Env::default();
+        let f = setup(&env);
+        let id = propose(&f);
+        f.gov.vote(&f.proposer, &id, &true, &10_000_0000000);
+
+        advance(&env, 101);
+        assert_eq!(f.target.fee(), -1, "target changed before the timelock");
+
+        advance(&env, 50);
+        f.gov.execute_proposal(&id);
+        assert_eq!(f.target.fee(), 750);
     }
 }

@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 5,
+    "address": 6,
     "nonce": 0
   },
   "auth": [
@@ -20,10 +20,16 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "string": "collateral_factor"
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
                 },
                 {
-                  "string": "7500"
+                  "symbol": "fee_bps"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 750
+                  }
                 }
               ]
             }
@@ -87,6 +93,7 @@
         }
       ]
     ],
+    [],
     [],
     [],
     []
@@ -263,7 +270,7 @@
                   "symbol": "Param"
                 },
                 {
-                  "string": "collateral_factor"
+                  "symbol": "fee_bps"
                 }
               ]
             },
@@ -283,13 +290,16 @@
                       "symbol": "Param"
                     },
                     {
-                      "string": "collateral_factor"
+                      "symbol": "fee_bps"
                     }
                   ]
                 },
                 "durability": "persistent",
                 "val": {
-                  "string": "7500"
+                  "i128": {
+                    "hi": 0,
+                    "lo": 750
+                  }
                 }
               }
             },
@@ -372,7 +382,10 @@
                         "symbol": "new_value"
                       },
                       "val": {
-                        "string": "7500"
+                        "i128": {
+                          "hi": 0,
+                          "lo": 750
+                        }
                       }
                     },
                     {
@@ -380,7 +393,7 @@
                         "symbol": "param_key"
                       },
                       "val": {
-                        "string": "collateral_factor"
+                        "symbol": "fee_bps"
                       }
                     },
                     {
@@ -408,6 +421,14 @@
                           "hi": 0,
                           "lo": 150000000000
                         }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "target"
+                      },
+                      "val": {
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
                       }
                     },
                     {
@@ -668,6 +689,50 @@
       ],
       [
         {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+            "key": "ledger_key_contract_instance",
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+                "key": "ledger_key_contract_instance",
+                "durability": "persistent",
+                "val": {
+                  "contract_instance": {
+                    "executable": {
+                      "wasm": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    },
+                    "storage": [
+                      {
+                        "key": {
+                          "symbol": "FEE"
+                        },
+                        "val": {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 750
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          4095
+        ]
+      ],
+      [
+        {
           "contract_code": {
             "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
           }
@@ -891,10 +956,16 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "string": "collateral_factor"
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
                 },
                 {
-                  "string": "7500"
+                  "symbol": "fee_bps"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 750
+                  }
                 }
               ]
             }
@@ -1026,7 +1097,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "string": "collateral_factor"
+                  "symbol": "fee_bps"
                 }
               ]
             }
@@ -1247,6 +1318,63 @@
       "event": {
         "ext": "v0",
         "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000006"
+              },
+              {
+                "symbol": "set_param"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "symbol": "fee_bps"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 750
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000006",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "set_param"
+              }
+            ],
+            "data": "void"
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000005",
         "type_": "contract",
         "body": {
           "v0": {
@@ -1261,10 +1389,13 @@
                   "u64": 0
                 },
                 {
-                  "string": "collateral_factor"
+                  "symbol": "fee_bps"
                 },
                 {
-                  "string": "7500"
+                  "i128": {
+                    "hi": 0,
+                    "lo": 750
+                  }
                 }
               ]
             }
@@ -1306,6 +1437,56 @@
                 "symbol": "fn_call"
               },
               {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000006"
+              },
+              {
+                "symbol": "fee"
+              }
+            ],
+            "data": "void"
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000006",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "fee"
+              }
+            ],
+            "data": {
+              "i128": {
+                "hi": 0,
+                "lo": 750
+              }
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000005"
               },
               {
@@ -1313,7 +1494,7 @@
               }
             ],
             "data": {
-              "string": "collateral_factor"
+              "symbol": "fee_bps"
             }
           }
         }
@@ -1336,7 +1517,10 @@
               }
             ],
             "data": {
-              "string": "7500"
+              "i128": {
+                "hi": 0,
+                "lo": 750
+              }
             }
           }
         }
@@ -1423,7 +1607,10 @@
                     "symbol": "new_value"
                   },
                   "val": {
-                    "string": "7500"
+                    "i128": {
+                      "hi": 0,
+                      "lo": 750
+                    }
                   }
                 },
                 {
@@ -1431,7 +1618,7 @@
                     "symbol": "param_key"
                   },
                   "val": {
-                    "string": "collateral_factor"
+                    "symbol": "fee_bps"
                   }
                 },
                 {
@@ -1459,6 +1646,14 @@
                       "hi": 0,
                       "lo": 150000000000
                     }
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "target"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
                   }
                 },
                 {

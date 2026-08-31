@@ -1482,7 +1482,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "caught panic 'insufficient treasury balance' from contract function 'Symbol(obj#387)'"
+                  "string": "caught panic 'insufficient treasury balance' from contract function 'Symbol(obj#391)'"
                 },
                 {
                   "i128": {

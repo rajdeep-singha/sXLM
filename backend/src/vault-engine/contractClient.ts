@@ -534,14 +534,12 @@ export async function callUnpause(): Promise<string> {
 }
 
 /**
- * Governance parameter helpers — apply on-chain after proposal execution.
+ * LP pool admin helper.
+ *
+ * Vault and lending parameters are applied by the governance contract during
+ * execute_proposal. There is deliberately no admin-key path for those here.
  */
 
-export async function callSetCooldownPeriod(period: number): Promise<string> {
-  return executeAdminContractCall("set_cooldown_period", [
-    nativeToScVal(period, { type: "u64" }),
-  ]);
-}
 
 function getLpPoolContract(): Contract {
   return new Contract(config.contracts.lpPoolContractId);
@@ -640,23 +638,8 @@ async function executeLendingAdminCall(
   return result.hash;
 }
 
-export async function callUpdateCollateralFactor(bps: number): Promise<string> {
-  return executeLendingAdminCall("update_collateral_factor", [
-    nativeToScVal(bps, { type: "u64" }),
-  ]);
-}
 
-export async function callUpdateBorrowRate(bps: number): Promise<string> {
-  return executeLendingAdminCall("update_borrow_rate", [
-    nativeToScVal(bps, { type: "u64" }),
-  ]);
-}
 
-export async function callUpdateLiquidationThreshold(bps: number): Promise<string> {
-  return executeLendingAdminCall("update_liquidation_threshold", [
-    nativeToScVal(bps, { type: "u64" }),
-  ]);
-}
 
 async function pollTransaction(
   hash: string,
