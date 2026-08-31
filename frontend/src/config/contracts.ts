@@ -2,7 +2,7 @@ export const NETWORK = {
   name: import.meta.env.VITE_NETWORK_NAME || 'MAINNET',
   networkPassphrase: import.meta.env.VITE_NETWORK_PASSPHRASE || 'Public Global Stellar Network ; September 2015',
   horizonUrl: import.meta.env.VITE_HORIZON_URL || 'https://horizon.stellar.org',
-  sorobanRpcUrl: import.meta.env.VITE_SOROBAN_RPC_URL || 'https://mainnet.sorobanrpc.com',
+  sorobanRpcUrl: import.meta.env.VITE_SOROBAN_RPC_URL || 'https://soroban-rpc.mainnet.stellar.gateway.fm',
   friendbotUrl: '',
 } as const;
 

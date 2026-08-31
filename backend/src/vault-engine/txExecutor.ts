@@ -113,9 +113,10 @@ export async function submitTransaction(
         networkPassphrase: config.stellar.networkPassphrase,
       });
 
-      const rawOps = (tx.toEnvelope().v1().tx().operations());
-      for (const op of rawOps) {
-        builder.addOperation(op);
+      // Rebuild from the parsed operations. Reading them off the envelope
+      // union assumed a v1 envelope, which breaks as the protocol adds arms.
+      for (const op of tx.operations as unknown as xdr.Operation[]) {
+        builder.addOperation(op as never);
       }
 
       builder.setTimeout(300);

@@ -5,6 +5,16 @@ An XLM vault on Stellar, built on Soroban. Deposit XLM to receive **sXLM**, a sh
 Deployed on Stellar mainnet. Source is not verified on public explorers and the protocol is unaudited.
 
 ---
+
+## Documentation
+
+| Document | Covers |
+|----------|--------|
+| [Deployment Register](docs/DEPLOYMENT_REGISTER.md) | Contract IDs, WASM hashes, roles, services, live vault state |
+| [Accounting and Permission Review](docs/ACCOUNTING_REVIEW.md) | Findings from the August 2026 review and how each was resolved |
+| [Operations Pack](docs/OPERATIONS.md) | Monitoring requirements, keeper and incident runbooks, audit readiness |
+
+---
 ## User FeedBack
 <img width="1173" height="736" alt="image" src="https://github.com/user-attachments/assets/0795de6d-ccb6-47c9-9c8e-1b6c800fd3c8" />
 
