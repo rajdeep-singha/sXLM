@@ -52,9 +52,19 @@ For the frontend, set the same IDs with the `VITE_` prefix (e.g. `VITE_SXLM_TOKE
 
 ## Yield
 
-No strategy allocation is implemented, so the vault holds idle XLM and the exchange rate does not rise on its own.
+sXLM appreciates when XLM is added to the vault without new shares being minted. Five sources do that, all internal to the protocol:
 
-`add_rewards` transfers XLM into the vault before crediting anything, so the rate cannot rise without assets arriving. APY shown in the app is derived from realised exchange-rate history.
+| Source | Rate | Depends on |
+|--------|------|------------|
+| Borrow interest | 5% annual, 80% to holders | Amount borrowed |
+| Swap fees | 5 bps protocol cut, 80% to holders | Trading volume |
+| Withdrawal fee | 10 bps, kept by the vault | Exits |
+| Flash loan fee | 5 bps | Arbitrage |
+| Liquidation surcharge | 1% from the liquidator | Liquidations |
+
+No external strategy is implemented — nothing is routed to Blend or any other protocol. All five scale with **activity, not deposits**, so depositing more XLM does not increase them. With little borrowing or trading they are close to zero.
+
+The exchange rate cannot rise without XLM arriving first, and no admin path sets it. APY shown in the app is derived from realised rate history, not projected.
 
 ---
 

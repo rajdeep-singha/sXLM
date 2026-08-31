@@ -166,7 +166,7 @@ function DocContent() {
           {[
             { title: 'Non-custodial', desc: 'Users retain cryptographic control via Stellar Freighter. The protocol never holds signing authority.' },
             { title: 'Transparent', desc: 'Strategy performance, exchange rate history, and risk metrics are reported openly on-chain and via the analytics dashboard.' },
-            { title: 'Conservative', desc: 'New strategies require governance approval, audits, allocation caps, and risk scoring before receiving vault funds.' },
+            { title: 'Conservative', desc: 'No capital leaves the vault. Yield comes only from what the protocol itself collects, so there is no external counterparty to fail.' },
             { title: 'Composable', desc: 'sXLM is usable across Stellar DeFi — as collateral in lending markets, in AMM pools, and for governance participation.' },
           ].map((p) => (
             <div key={p.title} className="bg-[#F5F5F5] rounded-xl p-4 border border-[#e5e5e5]">
@@ -207,7 +207,7 @@ function DocContent() {
                 { name: 'vault', addr: 'CDYX...45PS', desc: 'Primary entry point — receives XLM, routes to strategies' },
                 { name: 'lending', addr: 'CAOW...QNJG', desc: 'Overcollateralized borrowing and lending engine' },
                 { name: 'lp-pool', addr: 'CAW2...VLHV', desc: 'AMM for XLM/sXLM liquidity' },
-                { name: 'governance', addr: 'CB7L...DEP4', desc: 'Timelock proposals, quorum, strategy approvals' },
+                { name: 'governance', addr: 'CB7L...DEP4', desc: 'Escrowed voting, quorum, timelock, cross-contract parameter changes' },
               ].map((c) => (
                 <tr key={c.name} className="border-b border-[#e5e5e5] hover:bg-[#F5F5F5] transition-colors">
                   <td className="py-3 px-4 font-mono text-xs text-black">{c.name}</td>
@@ -456,14 +456,56 @@ function DocContent() {
       <section id="governance-docs" className="scroll-mt-20">
         <H2 id="gov-h">Governance</H2>
         <P>
-          The <Code>governance</Code> contract facilitates decentralized parameter configuration with timelock execution.
-          Parameters subject to governance include protocol fees, collateral risk factors, oracle providers,
-          strategy approvals, liquidity-buffer targets, and allocation caps.
+          A proposal names a target contract, a parameter, and a value. If it passes it is applied by the governance
+          contract calling that contract directly — the approved value is not merely recorded somewhere.
         </P>
         <P>
-          The keeper operates as a limited-permission role controlled by multisig and constrained by on-chain policy.
-          It cannot arbitrarily move user funds — it can only call predefined contract functions and route funds
-          and holds the pooled XLM.
+          <strong className="text-black font-medium">Voting escrows sXLM.</strong> Weight is the amount locked, returned once voting
+          closes. Weighting by a live balance would let the same tokens vote on every proposal and be sold in the same
+          ledger they voted in.
+        </P>
+        <P>
+          Quorum is measured against the share supply recorded when the proposal was created, and always applies.
+          Execution waits for a timelock after voting closes, so a passing proposal is visible before it binds.
+        </P>
+
+        <H3 id="governable">What governance can change</H3>
+        <div className="overflow-x-auto my-4">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[#e5e5e5]">
+                <th className="text-left py-3 px-4 text-xs text-black/40 uppercase tracking-wider font-medium">Parameter</th>
+                <th className="text-left py-3 px-4 text-xs text-black/40 uppercase tracking-wider font-medium">Contract</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ['Protocol fee', 'vault'],
+                ['Withdrawal cooldown', 'vault'],
+                ['Withdrawal fee', 'vault'],
+                ['Flash loan fee', 'vault'],
+                ['Collateral factor', 'lending'],
+                ['Liquidation threshold', 'lending'],
+                ['Borrow rate', 'lending'],
+                ['Reserve utilisation cap', 'lending'],
+                ['Liquidation surcharge', 'lending'],
+                ['Share of interest paid to holders', 'lending'],
+              ].map(([param, target]) => (
+                <tr key={param} className="border-b border-[#e5e5e5] hover:bg-[#F5F5F5] transition-colors">
+                  <td className="py-3 px-4 text-xs text-black">{param}</td>
+                  <td className="py-3 px-4 font-mono text-xs text-black/50">{target}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <P>
+          The set is fixed. A proposal naming anything else fails at execution rather than appearing to succeed.
+        </P>
+        <P>
+          <strong className="text-black font-medium">Governance is not yet in control.</strong> Each contract takes orders from it only
+          after <Code>set_governance</Code> is called on that contract, which has not happened. Until then these
+          parameters answer to the admin key — see What the admin key can still do.
         </P>
       </section>
 
