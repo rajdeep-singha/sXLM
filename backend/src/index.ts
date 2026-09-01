@@ -34,13 +34,27 @@ async function main() {
   const metricsCron = new MetricsCron(prisma);
   const keeperBot = new KeeperBot();
 
+  // The keeper and risk engine sign with the admin key and act on mainnet: TTL
+  // bumps, harvests, and an automatic pause on a solvency shortfall. Running
+  // them from a developer machine means a laptop is driving production, so they
+  // are opt-in rather than automatic.
+  const runAutomation = process.env["RUN_AUTOMATION"] === "true";
+
   await stakingEngine.initialize();
   await rewardEngine.initialize();
-  await riskEngine.initialize();
   await eventListener.initialize();
   await userService.initialize();
   await metricsCron.initialize();
-  await keeperBot.initialize();
+
+  if (runAutomation) {
+    await riskEngine.initialize();
+    await keeperBot.initialize();
+    console.log("[Startup] Automation ON — keeper and risk engine are live");
+  } else {
+    console.log(
+      "[Startup] Automation OFF — keeper and risk engine idle. Set RUN_AUTOMATION=true to enable (production only)."
+    );
+  }
 
   // Start API Gateway
   const server = await startApiGateway({

@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import StakeCard from '../components/StakeCard';
 import { useProtocol } from '../hooks/useProtocol';
 import { formatAPY } from '../utils/stellar';
@@ -18,6 +19,13 @@ export default function Stake() {
       </div>
 
       <StakeCard />
+
+        <p className="text-sm text-gray-500 text-center">
+          Already holding sXLM?{' '}
+          <Link to="/withdraw" className="text-black underline underline-offset-4">
+            Withdraw your XLM
+          </Link>
+        </p>
 
       <div className="card p-5 space-y-3">
         {[
