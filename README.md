@@ -2,8 +2,6 @@
 
 An XLM vault on Stellar, built on Soroban. Deposit XLM to receive **sXLM**, a share token representing a proportional claim on pooled XLM, redeemable at the vault rate and usable as collateral in the lending market.
 
-sXLM does not currently earn yield — no strategy allocation is implemented. See [Yield](#yield).
-
 Deployed on Stellar mainnet. Source is not verified on public explorers and the protocol is unaudited.
 
 ---
