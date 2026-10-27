@@ -1,5 +1,5 @@
 import cron from "node-cron";
-import { getTotalStaked, getTotalSupply } from "../staking-engine/contractClient.js";
+import { getTotalStaked, getTotalSupply } from "../vault-engine/contractClient.js";
 let cronJob = null;
 const XLM_PRICE_API = "https://api.coingecko.com/api/v3/simple/price?ids=stellar&vs_currencies=usd";
 export class MetricsCron {
@@ -70,23 +70,14 @@ export class MetricsCron {
         // Calculate TVL in USD: totalStaked (in stroops) / 1e7 * xlmPrice
         const totalStakedXlm = Number(totalStaked) / 1e7;
         const tvlUsd = totalStakedXlm * (this.lastXlmPrice || 0);
-        // Get average validator score
-        const validators = await this.prisma.validator.findMany({
-            select: { performanceScore: true },
-        });
-        const avgValidatorScore = validators.length > 0
-            ? validators.reduce((sum, v) => sum + v.performanceScore, 0) /
-                validators.length
-            : 0;
         await this.prisma.protocolMetrics.create({
             data: {
                 totalStaked,
                 totalSupply,
                 tvlUsd,
-                avgValidatorScore,
             },
         });
-        console.log(`[MetricsCron] Snapshot: staked=${totalStakedXlm.toFixed(2)} XLM, TVL=$${tvlUsd.toFixed(2)}, avgScore=${avgValidatorScore.toFixed(3)}`);
+        console.log(`[MetricsCron] Snapshot: staked=${totalStakedXlm.toFixed(2)} XLM, TVL=$${tvlUsd.toFixed(2)}`);
     }
     getXlmPrice() {
         return this.lastXlmPrice;

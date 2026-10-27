@@ -43,7 +43,6 @@ export declare const config: {
         readonly minStakeAmount: bigint;
         readonly maxStakeAmount: bigint;
         readonly rebalanceThreshold: 0.1;
-        readonly validatorMinUptime: 0.95;
         readonly exchangeRateRefreshIntervalMs: 60000;
         readonly rewardSnapshotIntervalMs: number;
         readonly withdrawalPollIntervalMs: 30000;

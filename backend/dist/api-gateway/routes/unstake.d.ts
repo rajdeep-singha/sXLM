@@ -1,6 +1,6 @@
 import { FastifyPluginAsync } from "fastify";
 import { PrismaClient } from "@prisma/client";
-import { StakingEngine } from "../../staking-engine/index.js";
+import { StakingEngine } from "../../vault-engine/index.js";
 export declare const unstakeRoutes: FastifyPluginAsync<{
     stakingEngine: StakingEngine;
     prisma?: PrismaClient;

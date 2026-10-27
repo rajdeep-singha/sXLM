@@ -1,5 +1,5 @@
 import { FastifyPluginAsync } from "fastify";
-import { StakingEngine } from "../../staking-engine/index.js";
+import { StakingEngine } from "../../vault-engine/index.js";
 /**
  * Admin routes — protected by admin secret key check.
  * These call on-chain admin functions (pause, unpause, slashing).

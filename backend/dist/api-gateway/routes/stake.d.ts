@@ -1,5 +1,5 @@
 import { FastifyPluginAsync } from "fastify";
-import { StakingEngine } from "../../staking-engine/index.js";
+import { StakingEngine } from "../../vault-engine/index.js";
 export declare const stakeRoutes: FastifyPluginAsync<{
     stakingEngine: StakingEngine;
 }>;
