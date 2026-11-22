@@ -1,0 +1,10 @@
+{
+  "adminPublicKey": "GDWXTIIROGCVBSNQMBJFH6HOWQ4YSRVMKSUS53CH6MP56WSWD6J4VZ5N",
+  "signers": [
+    { "publicKey": "G...SIGNER_A", "weight": 1 },
+    { "publicKey": "G...SIGNER_B", "weight": 1 },
+    { "publicKey": "G...SIGNER_C", "weight": 1 }
+  ],
+  "threshold": 2,
+  "keeperPublicKey": "G...KEEPER"
+}

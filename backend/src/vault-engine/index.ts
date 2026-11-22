@@ -16,8 +16,6 @@ import {
   getTreasuryBalance,
   getIsPaused,
   getProtocolFeeBps,
-  callPause,
-  callUnpause,
 } from "./contractClient.js";
 import { getEventBus, EventType } from "../event-bus/index.js";
 
@@ -136,14 +134,6 @@ export class StakingEngine {
     );
   }
 
-  // --- Admin operations ---
-
-
-  async pause(): Promise<string> {
-    return callPause();
-  }
-
-  async unpause(): Promise<string> {
-    return callUnpause();
-  }
+  // Pause and unpause are admin actions. The admin is a multisig account, so
+  // they are signed offline by the signers, not triggered from this service.
 }

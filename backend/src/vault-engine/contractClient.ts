@@ -12,6 +12,7 @@ import {
   Operation,
 } from "@stellar/stellar-sdk";
 import { config } from "../config/index.js";
+import { loadKeeperKeypair } from "../keeper/keys.js";
 
 const server = new rpc.Server(config.stellar.rpcUrl);
 
@@ -35,9 +36,17 @@ async function getSourceAccount(): Promise<{
   keypair: Keypair;
   account: Awaited<ReturnType<rpc.Server["getAccount"]>>;
 }> {
-  const keypair = Keypair.fromSecret(config.admin.secretKey);
+  const keypair = loadKeeperKeypair(config.keeper.secretKey, config.admin.publicKey);
   const account = await server.getAccount(keypair.publicKey());
   return { keypair, account };
+}
+
+/**
+ * Source account for read-only simulations. Simulation needs an existing
+ * account but no signature, so the admin address serves without any secret.
+ */
+async function getReadAccount(): Promise<Awaited<ReturnType<rpc.Server["getAccount"]>>> {
+  return server.getAccount(config.admin.publicKey);
 }
 
 export interface DepositResult {
@@ -244,7 +253,7 @@ export async function callClaimWithdrawal(
 
 export async function getExchangeRate(): Promise<number> {
   const contract = getStakingContract();
-  const { keypair, account } = await getSourceAccount();
+  const account = await getReadAccount();
 
   const readOp = contract.call("get_exchange_rate");
 
@@ -273,7 +282,7 @@ export async function getExchangeRate(): Promise<number> {
 
 export async function getTotalStaked(): Promise<bigint> {
   const contract = getStakingContract();
-  const { keypair, account } = await getSourceAccount();
+  const account = await getReadAccount();
 
   const readOp = contract.call("total_xlm_staked");
 
@@ -300,7 +309,7 @@ export async function getTotalStaked(): Promise<bigint> {
 
 export async function getTotalSupply(): Promise<bigint> {
   const contract = getTokenContract();
-  const { keypair, account } = await getSourceAccount();
+  const account = await getReadAccount();
 
   const readOp = contract.call("total_supply");
 
@@ -327,7 +336,7 @@ export async function getTotalSupply(): Promise<bigint> {
 
 export async function getLiquidityBuffer(): Promise<bigint> {
   const contract = getStakingContract();
-  const { keypair, account } = await getSourceAccount();
+  const account = await getReadAccount();
 
   const readOp = contract.call("liquidity_buffer");
 
@@ -354,7 +363,7 @@ export async function getLiquidityBuffer(): Promise<bigint> {
 
 export async function getPendingWithdrawals(): Promise<bigint> {
   const contract = getStakingContract();
-  const { account } = await getSourceAccount();
+  const account = await getReadAccount();
 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
@@ -377,7 +386,7 @@ export async function getPendingWithdrawals(): Promise<bigint> {
 
 export async function getIdleBalance(): Promise<bigint> {
   const contract = getStakingContract();
-  const { account } = await getSourceAccount();
+  const account = await getReadAccount();
 
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
@@ -401,7 +410,7 @@ export async function getIdleBalance(): Promise<bigint> {
 
 export async function getTreasuryBalance(): Promise<bigint> {
   const contract = getStakingContract();
-  const { keypair, account } = await getSourceAccount();
+  const account = await getReadAccount();
 
   const readOp = contract.call("treasury_balance");
 
@@ -428,7 +437,7 @@ export async function getTreasuryBalance(): Promise<bigint> {
 
 export async function getIsPaused(): Promise<boolean> {
   const contract = getStakingContract();
-  const { keypair, account } = await getSourceAccount();
+  const account = await getReadAccount();
 
   const readOp = contract.call("is_paused");
 
@@ -455,7 +464,7 @@ export async function getIsPaused(): Promise<boolean> {
 
 export async function getProtocolFeeBps(): Promise<number> {
   const contract = getStakingContract();
-  const { keypair, account } = await getSourceAccount();
+  const account = await getReadAccount();
 
   const readOp = contract.call("protocol_fee_bps");
 
@@ -480,131 +489,23 @@ export async function getProtocolFeeBps(): Promise<number> {
   return 1000;
 }
 
-/**
- * Helper: execute an admin write call on the staking contract using the SDK.
- * Signs with the admin keypair from config — works on both testnet and mainnet
- * without requiring the Stellar CLI to be installed on the server.
- */
-async function executeAdminContractCall(
-  method: string,
-  args: ReturnType<typeof nativeToScVal>[] = []
-): Promise<string> {
-  const { keypair, account } = await getSourceAccount();
-  const contract = getStakingContract();
-
-  const op = contract.call(method, ...args);
-
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: getNetworkPassphrase(),
-  })
-    .addOperation(op)
-    .setTimeout(300)
-    .build();
-
-  const preparedTx = await server.prepareTransaction(tx);
-  preparedTx.sign(keypair);
-
-  const result = await server.sendTransaction(preparedTx);
-  if (result.status === "ERROR") {
-    throw new Error(`${method} failed: ${JSON.stringify(result.errorResult)}`);
-  }
-
-  await pollTransaction(result.hash);
-  console.log(`[contractClient] ${method} executed: ${result.hash}`);
-  return result.hash;
-}
-
-export async function callWithdrawFees(amount: bigint): Promise<string> {
-  return executeAdminContractCall("withdraw_fees", [
-    nativeToScVal(amount, { type: "i128" }),
-  ]);
-}
+// Admin-only vault calls (withdraw_fees, pause, unpause, set_*) are not made
+// from this service. The admin is a multisig account; those transactions are
+// built and signed offline. See docs/OPERATIONS.md.
 
 /**
- * Contribute realised yield to the vault.
- *
- * `add_rewards` now transfers the XLM in rather than incrementing a counter, so
- * the admin account must actually hold `amount` at call time. A shortfall fails
- * the transaction instead of raising the exchange rate against nothing.
+ * LP pool reads. Fee collection is permissionless and done by the keeper
+ * (keeper/index.ts). Vault and lending parameters are applied by the governance
+ * contract during execute_proposal; there is no admin-key path for them here.
  */
-export async function callAddRewards(amount: bigint): Promise<string> {
-  return executeAdminContractCall("add_rewards", [
-    new Address(config.admin.publicKey).toScVal(),
-    nativeToScVal(amount, { type: "i128" }),
-  ]);
-}
-
-// callRecalibrateRate removed: the exchange rate is derived on read, so there is
-// nothing to recalibrate.
-//
-// callApplySlashing removed: it decremented the stored asset counter, which no
-// longer exists. Strategy losses become visible through the strategy balance
-// itself once the Phase 2 registry lands, reported via report_strategy_loss.
-
-export async function callPause(): Promise<string> {
-  return executeAdminContractCall("pause");
-}
-
-export async function callUnpause(): Promise<string> {
-  return executeAdminContractCall("unpause");
-}
-
-/**
- * LP pool admin helper.
- *
- * Vault and lending parameters are applied by the governance contract during
- * execute_proposal. There is deliberately no admin-key path for those here.
- */
-
 
 function getLpPoolContract(): Contract {
   return new Contract(config.contracts.lpPoolContractId);
 }
 
-async function executeLpPoolAdminCall(
-  method: string,
-  args: ReturnType<typeof nativeToScVal>[] = []
-): Promise<string> {
-  const { keypair, account } = await getSourceAccount();
-  const contract = getLpPoolContract();
-
-  const op = contract.call(method, ...args);
-
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: getNetworkPassphrase(),
-  })
-    .addOperation(op)
-    .setTimeout(300)
-    .build();
-
-  const preparedTx = await server.prepareTransaction(tx);
-  preparedTx.sign(keypair);
-
-  const result = await server.sendTransaction(preparedTx);
-  if (result.status === "ERROR") {
-    throw new Error(`lp_pool::${method} failed: ${JSON.stringify(result.errorResult)}`);
-  }
-
-  await pollTransaction(result.hash);
-  console.log(`[contractClient] lp_pool::${method} executed: ${result.hash}`);
-  return result.hash;
-}
-
-export async function callCollectProtocolFees(): Promise<string> {
-  return executeLpPoolAdminCall("collect_protocol_fees");
-}
-
-export async function callSetLpProtocolFeeBps(bps: number): Promise<string> {
-  return executeLpPoolAdminCall("set_protocol_fee_bps", [
-    nativeToScVal(bps, { type: "u32" }),
-  ]);
-}
-
 export async function getLpAccruedProtocolFees(): Promise<bigint> {
   const contract = getLpPoolContract();
-  const { keypair, account } = await getSourceAccount();
+  const account = await getReadAccount();
 
   const readOp = contract.call("accrued_protocol_fees");
 
@@ -624,39 +525,6 @@ export async function getLpAccruedProtocolFees(): Promise<bigint> {
 
   return BigInt(0);
 }
-
-async function executeLendingAdminCall(
-  method: string,
-  args: ReturnType<typeof nativeToScVal>[] = []
-): Promise<string> {
-  const { keypair, account } = await getSourceAccount();
-  const contract = getLendingContract();
-
-  const op = contract.call(method, ...args);
-
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: getNetworkPassphrase(),
-  })
-    .addOperation(op)
-    .setTimeout(300)
-    .build();
-
-  const preparedTx = await server.prepareTransaction(tx);
-  preparedTx.sign(keypair);
-
-  const result = await server.sendTransaction(preparedTx);
-  if (result.status === "ERROR") {
-    throw new Error(`lending::${method} failed: ${JSON.stringify(result.errorResult)}`);
-  }
-
-  await pollTransaction(result.hash);
-  console.log(`[contractClient] lending::${method} executed: ${result.hash}`);
-  return result.hash;
-}
-
-
-
 
 async function pollTransaction(
   hash: string,

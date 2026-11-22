@@ -66,10 +66,17 @@ export const config = {
     url: process.env["REDIS_URL"] ?? "",
   },
 
+  // The contract admin. Only its address is configured: admin actions are
+  // signed offline by the multisig signers, never by this service.
+  // The address also serves as the source account for read-only simulations.
   admin: {
-    secretKey: requireEnv("ADMIN_SECRET_KEY", ""),
-    // Fallback to known active mainnet account used for read-only Soroban simulations
     publicKey: requireEnv("ADMIN_PUBLIC_KEY", "GDWXTIIROGCVBSNQMBJFH6HOWQ4YSRVMKSUS53CH6MP56WSWD6J4VZ5N"),
+  },
+
+  // The keeper signs permissionless upkeep only: TTL bumps, interest
+  // settlement, LP fee collection. It must not be a signer on the admin account.
+  keeper: {
+    secretKey: requireEnv("KEEPER_SECRET_KEY", ""),
   },
 
   jwt: {

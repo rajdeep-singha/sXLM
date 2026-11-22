@@ -207,7 +207,6 @@ echo "  Governance contract initialized"
 # Write .env file
 # ---------------------------------------------------------------------------
 ENV_FILE="$SCRIPT_DIR/../.env"
-ADMIN_SECRET=$(stellar keys show "$ACCOUNT" 2>/dev/null || echo "")
 
 cat > "$ENV_FILE" <<EOF
 # ===========================================
@@ -239,9 +238,13 @@ DATABASE_URL=postgresql://sxlm:sxlm_password@localhost:5432/sxlm_protocol
 # --- Redis ---
 REDIS_URL=redis://localhost:6379
 
-# --- Admin Keypair ---
-ADMIN_SECRET_KEY=$ADMIN_SECRET
+# --- Admin and keeper ---
+# Only the admin's address is configured. Admin actions are signed offline;
+# convert the admin to a multisig with npm run multisig (docs/OPERATIONS.md).
 ADMIN_PUBLIC_KEY=$ADMIN_PUB_KEY
+# The keeper must be a separate, funded account. Set its secret here.
+KEEPER_SECRET_KEY=
+RUN_AUTOMATION=false
 
 # --- JWT ---
 JWT_SECRET=$(openssl rand -hex 32)

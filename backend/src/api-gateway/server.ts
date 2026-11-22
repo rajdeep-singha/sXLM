@@ -13,7 +13,6 @@ import { statsRoutes } from "./routes/stats.js";
 import { apyRoutes } from "./routes/apy.js";
 import { withdrawalRoutes } from "./routes/withdrawals.js";
 import { authRoutes } from "./routes/auth.js";
-import { adminRoutes } from "./routes/admin.js";
 import { lendingRoutes } from "./routes/lending.js";
 import { liquidityRoutes } from "./routes/liquidity.js";
 import { governanceRoutes } from "./routes/governance.js";
@@ -80,12 +79,6 @@ export async function startApiGateway(deps: GatewayDeps) {
   // Withdrawal query routes (public — read-only by wallet address)
   await fastify.register(withdrawalRoutes, {
     userService: deps.userService,
-    prefix: "/api",
-  });
-
-  // Admin routes (protected by X-Admin-Key header)
-  await fastify.register(adminRoutes, {
-    stakingEngine: deps.stakingEngine,
     prefix: "/api",
   });
 

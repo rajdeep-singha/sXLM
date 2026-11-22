@@ -30,7 +30,7 @@ The project is a monorepo with three main components:
 
 - **Chain:** Stellar (Soroban). Default configuration targets Stellar **mainnet**.
 - **Data:** PostgreSQL (Prisma) for metrics, withdrawals, positions and governance; Redis for event bus.
-- **Wallet:** Stellar Freighter (frontend); backend uses admin keypair for contract interactions.
+- **Wallet:** Stellar Freighter (frontend); the backend keeper signs permissionless upkeep with its own keypair. Admin actions are signed offline by the admin multisig.
 
 ---
 
@@ -152,8 +152,9 @@ Default dev server: `http://localhost:5173`.
 | `GOVERNANCE_CONTRACT_ID` | Deployed governance contract ID |
 | `PORT` | API port (default `3001`) |
 | `HOST` | Bind host (default `0.0.0.0`) |
-| `ADMIN_SECRET_KEY` | Admin secret key for contract txs |
-| `ADMIN_PUBLIC_KEY` | Admin public key |
+| `ADMIN_PUBLIC_KEY` | Contract admin address (used as the source for read-only simulations) |
+| `KEEPER_SECRET_KEY` | Keeper secret key; a separate account from the admin, never one of its signers |
+| `RUN_AUTOMATION` | `true` only on the production instance that runs the keeper and risk engine |
 | `JWT_SECRET` | Secret for JWT auth |
 | `JWT_EXPIRES_IN` | JWT expiry (e.g. `24h`) |
 | `GOVERNANCE_WEBHOOK_URL` | Optional webhook for governance events |
