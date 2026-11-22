@@ -5,8 +5,8 @@ export declare class UserService {
     initialize(): Promise<void>;
     shutdown(): Promise<void>;
     getWithdrawalsByWallet(wallet: string): Promise<{
-        id: number;
         unlockTime: Date;
+        id: number;
         wallet: string;
         amount: bigint;
         status: string;
@@ -16,8 +16,8 @@ export declare class UserService {
     getStakingHistory(wallet: string): Promise<{
         wallet: string;
         withdrawals: {
-            id: number;
             unlockTime: Date;
+            id: number;
             wallet: string;
             amount: bigint;
             status: string;

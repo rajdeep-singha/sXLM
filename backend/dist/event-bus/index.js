@@ -4,7 +4,6 @@ export var EventType;
 (function (EventType) {
     EventType["STAKE_EXECUTED"] = "stake:executed";
     EventType["UNSTAKE_EXECUTED"] = "unstake:executed";
-    EventType["VALIDATOR_DOWN"] = "validator:down";
     EventType["REWARD_UPDATED"] = "reward:updated";
     EventType["WITHDRAWAL_READY"] = "withdrawal:ready";
     EventType["REBALANCE_REQUIRED"] = "rebalance:required";

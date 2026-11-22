@@ -5,11 +5,10 @@
  *
  * Every 6 hours:
  *   1. Harvest accrued lending interest from the lending contract → admin wallet
- *   2. Pipe harvested interest to staking.add_rewards() → raises sXLM exchange rate
+ *   2. Return it via staking.add_rewards(), which transfers the XLM back into
+ *      the vault. The admin wallet is a waypoint, not a destination: if the
+ *      funds are not there, step 2 fails rather than lifting the rate anyway.
  *   3. Bump TTL on all 5 contracts so they never expire
- *
- * Every 24 hours:
- *   4. Recalibrate the staking exchange rate (sanity check)
  *
  * The reward engine (reward-engine/index.ts) handles simulated APR-based distributions
  * independently. This keeper handles REAL yield from lending fees.
@@ -23,7 +22,6 @@ export declare class KeeperBot {
     private queryLendingAccruedInterest;
     private harvestLendingInterest;
     bumpAllContractTTLs(): Promise<void>;
-    recalibrateStakingRate(): Promise<void>;
     private logLpPoolStats;
     recycleTreasury(): Promise<void>;
     private simulateView;

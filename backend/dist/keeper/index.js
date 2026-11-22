@@ -5,26 +5,23 @@
  *
  * Every 6 hours:
  *   1. Harvest accrued lending interest from the lending contract → admin wallet
- *   2. Pipe harvested interest to staking.add_rewards() → raises sXLM exchange rate
+ *   2. Return it via staking.add_rewards(), which transfers the XLM back into
+ *      the vault. The admin wallet is a waypoint, not a destination: if the
+ *      funds are not there, step 2 fails rather than lifting the rate anyway.
  *   3. Bump TTL on all 5 contracts so they never expire
- *
- * Every 24 hours:
- *   4. Recalibrate the staking exchange rate (sanity check)
  *
  * The reward engine (reward-engine/index.ts) handles simulated APR-based distributions
  * independently. This keeper handles REAL yield from lending fees.
  */
 import { rpc, Contract, scValToNative, Keypair, TransactionBuilder, BASE_FEE, } from "@stellar/stellar-sdk";
 import { config } from "../config/index.js";
-import { callAddRewards, callWithdrawFees, callCollectProtocolFees, getLpAccruedProtocolFees, getTreasuryBalance, } from "../staking-engine/contractClient.js";
+import { callAddRewards, callWithdrawFees, callCollectProtocolFees, getLpAccruedProtocolFees, getTreasuryBalance, } from "../vault-engine/contractClient.js";
 const KEEPER_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const TTL_BUMP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const RECALIBRATE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const TREASURY_RECYCLE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const TREASURY_RECYCLE_THRESHOLD = BigInt(100_0000000); // 100 XLM in stroops
 let keeperInterval = null;
 let ttlInterval = null;
-let recalibrateInterval = null;
 let treasuryRecycleInterval = null;
 export class KeeperBot {
     server;
@@ -54,15 +51,6 @@ export class KeeperBot {
                 console.error("[KeeperBot] TTL bump error:", err);
             }
         }, TTL_BUMP_INTERVAL_MS);
-        // Schedule recalibration every 24h
-        recalibrateInterval = setInterval(async () => {
-            try {
-                await this.recalibrateStakingRate();
-            }
-            catch (err) {
-                console.error("[KeeperBot] Recalibrate error:", err);
-            }
-        }, RECALIBRATE_INTERVAL_MS);
         // Schedule treasury recycling every 24h
         treasuryRecycleInterval = setInterval(async () => {
             try {
@@ -82,10 +70,6 @@ export class KeeperBot {
         if (ttlInterval) {
             clearInterval(ttlInterval);
             ttlInterval = null;
-        }
-        if (recalibrateInterval) {
-            clearInterval(recalibrateInterval);
-            recalibrateInterval = null;
         }
         if (treasuryRecycleInterval) {
             clearInterval(treasuryRecycleInterval);
@@ -192,18 +176,6 @@ export class KeeperBot {
                 console.error(`[KeeperBot] TTL bump failed for ${c.name}:`, err);
                 // Non-fatal: log and continue
             }
-        }
-    }
-    // ============================================================
-    // Recalibrate staking exchange rate (sanity check)
-    // ============================================================
-    async recalibrateStakingRate() {
-        try {
-            await this.executeAdminCall(config.contracts.stakingContractId, "recalibrate_rate", []);
-            console.log("[KeeperBot] Staking rate recalibrated");
-        }
-        catch (err) {
-            console.error("[KeeperBot] Recalibrate failed:", err);
         }
     }
     // ============================================================
