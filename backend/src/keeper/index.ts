@@ -1,47 +1,52 @@
 /**
  * Keeper Bot
  *
- * Runs on a schedule to keep the protocol healthy:
+ * Keeps the protocol running. Every call it makes is permissionless, so it
+ * signs with its own key and never holds admin power.
  *
  * Every 6 hours:
- *   1. Harvest accrued lending interest from the lending contract → admin wallet
- *   2. Return it via staking.add_rewards(), which transfers the XLM back into
- *      the vault. The admin wallet is a waypoint, not a destination: if the
- *      funds are not there, step 2 fails rather than lifting the rate anyway.
- *   3. Bump TTL on all 5 contracts so they never expire
+ *   1. collect_protocol_fees on the LP pool — the vault's share is sent to the
+ *      vault directly, raising the sXLM rate; the rest goes to the admin.
+ *   2. settle_interest on the lending contract — the holders' share of repaid
+ *      interest is sent to the vault directly.
  *
- * The reward engine (reward-engine/index.ts) handles simulated APR-based distributions
- * independently. This keeper handles REAL yield from lending fees.
+ * Every 24 hours:
+ *   3. bump_instance on all five contracts so they never archive.
+ *
+ * Neither step 1 nor step 2 routes money through the keeper or the admin, so
+ * there is nothing to forward with add_rewards afterwards.
  */
 
 import {
   rpc,
   Contract,
-  Address,
   nativeToScVal,
   scValToNative,
-  Keypair,
   TransactionBuilder,
   BASE_FEE,
 } from "@stellar/stellar-sdk";
 import { config } from "../config/index.js";
-import {
-  callAddRewards,
-  callWithdrawFees,
-  callCollectProtocolFees,
-  getLpAccruedProtocolFees,
-  getTreasuryBalance,
-} from "../vault-engine/contractClient.js";
+import { getLpAccruedProtocolFees } from "../vault-engine/contractClient.js";
+import { loadKeeperKeypair } from "./keys.js";
 
 const KEEPER_INTERVAL_MS = 6 * 60 * 60 * 1000;      // 6 hours
 const TTL_BUMP_INTERVAL_MS = 24 * 60 * 60 * 1000;    // 24 hours
 
-const TREASURY_RECYCLE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const TREASURY_RECYCLE_THRESHOLD = BigInt(100_0000000);   // 100 XLM in stroops
+/**
+ * Every contract method the keeper is allowed to call. Each must be
+ * permissionless on-chain; tests/keeper.test.ts checks that against the
+ * contract source.
+ */
+export const KEEPER_METHODS = [
+  "bump_instance",
+  "settle_interest",
+  "collect_protocol_fees",
+] as const;
+
+export type KeeperMethod = (typeof KEEPER_METHODS)[number];
 
 let keeperInterval: ReturnType<typeof setInterval> | null = null;
 let ttlInterval: ReturnType<typeof setInterval> | null = null;
-let treasuryRecycleInterval: ReturnType<typeof setInterval> | null = null;
 
 export class KeeperBot {
   private server: rpc.Server;
@@ -53,24 +58,25 @@ export class KeeperBot {
   async initialize(): Promise<void> {
     console.log("[KeeperBot] Initializing...");
 
-    // Run immediately on startup
-    await this.runHarvestCycle().catch((err) =>
-      console.error("[KeeperBot] Initial harvest cycle failed:", err)
+    // Fail fast on a missing key, or on the admin key, before scheduling anything.
+    const keypair = loadKeeperKeypair(config.keeper.secretKey, config.admin.publicKey);
+    console.log(`[KeeperBot] Signing as ${keypair.publicKey()}`);
+
+    await this.runUpkeepCycle().catch((err) =>
+      console.error("[KeeperBot] Initial upkeep cycle failed:", err)
     );
     await this.bumpAllContractTTLs().catch((err) =>
       console.error("[KeeperBot] Initial TTL bump failed:", err)
     );
 
-    // Schedule harvest cycle every 6h
     keeperInterval = setInterval(async () => {
       try {
-        await this.runHarvestCycle();
+        await this.runUpkeepCycle();
       } catch (err) {
-        console.error("[KeeperBot] Harvest cycle error:", err);
+        console.error("[KeeperBot] Upkeep cycle error:", err);
       }
     }, KEEPER_INTERVAL_MS);
 
-    // Schedule TTL bumps every 24h
     ttlInterval = setInterval(async () => {
       try {
         await this.bumpAllContractTTLs();
@@ -79,88 +85,62 @@ export class KeeperBot {
       }
     }, TTL_BUMP_INTERVAL_MS);
 
-    // Schedule treasury recycling every 24h
-    treasuryRecycleInterval = setInterval(async () => {
-      try {
-        await this.recycleTreasury();
-      } catch (err) {
-        console.error("[KeeperBot] Treasury recycle error:", err);
-      }
-    }, TREASURY_RECYCLE_INTERVAL_MS);
-
     console.log(
-      `[KeeperBot] Running — harvest every ${KEEPER_INTERVAL_MS / 3_600_000}h, TTL bump every ${TTL_BUMP_INTERVAL_MS / 3_600_000}h`
+      `[KeeperBot] Running — upkeep every ${KEEPER_INTERVAL_MS / 3_600_000}h, TTL bump every ${TTL_BUMP_INTERVAL_MS / 3_600_000}h`
     );
   }
 
   async shutdown(): Promise<void> {
     if (keeperInterval) { clearInterval(keeperInterval); keeperInterval = null; }
     if (ttlInterval) { clearInterval(ttlInterval); ttlInterval = null; }
-    if (treasuryRecycleInterval) { clearInterval(treasuryRecycleInterval); treasuryRecycleInterval = null; }
     console.log("[KeeperBot] Shut down");
   }
 
   // ============================================================
-  // Core: harvest lending interest and pipe to staking rewards
+  // Upkeep: move accrued fees and interest to the vault
   // ============================================================
 
-  async runHarvestCycle(): Promise<void> {
-    console.log("[KeeperBot] Starting harvest cycle...");
+  async runUpkeepCycle(): Promise<void> {
+    console.log("[KeeperBot] Starting upkeep cycle...");
 
-    // Step 1: Check how much interest has accrued on the lending contract
-    const pendingInterest = await this.queryLendingAccruedInterest();
-
-    // Log LP pool stats for transparency
     await this.logLpPoolStats();
 
-    // Step 2: Collect LP protocol fees
-    let lpProtocolFees = BigInt(0);
     try {
       const accrued = await getLpAccruedProtocolFees();
       if (accrued > BigInt(0)) {
-        await callCollectProtocolFees();
-        lpProtocolFees = accrued;
-        console.log(`[KeeperBot] Collected ${Number(lpProtocolFees) / 1e7} XLM in LP protocol fees`);
+        const hash = await this.executeKeeperCall(
+          config.contracts.lpPoolContractId,
+          "collect_protocol_fees"
+        );
+        console.log(
+          `[KeeperBot] Collected ${Number(accrued) / 1e7} XLM of LP protocol fees: ${hash}`
+        );
       }
     } catch (err) {
       console.warn("[KeeperBot] LP protocol fee collection failed:", err);
     }
 
-    // Step 3: Harvest lending interest
-    let harvested = BigInt(0);
-    if (pendingInterest > BigInt(0)) {
-      console.log(
-        `[KeeperBot] Pending interest: ${Number(pendingInterest) / 1e7} XLM`
-      );
-      harvested = await this.harvestLendingInterest(pendingInterest);
-      if (harvested > BigInt(0)) {
-        console.log(`[KeeperBot] Harvested ${Number(harvested) / 1e7} XLM from lending`);
-      }
-    }
-
-    // Step 4: Pipe total yield to add_rewards
-    const totalYield = harvested + lpProtocolFees;
-    if (totalYield <= BigInt(0)) {
-      console.log("[KeeperBot] No yield to distribute");
+    const pendingInterest = await this.queryLendingAccruedInterest();
+    if (pendingInterest <= BigInt(0)) {
+      console.log("[KeeperBot] No lending interest to settle");
       return;
     }
 
     try {
-      await callAddRewards(totalYield);
+      const hash = await this.executeKeeperCall(
+        config.contracts.lendingContractId,
+        "settle_interest"
+      );
+      const remaining = await this.queryLendingAccruedInterest();
+      const settled = pendingInterest > remaining ? pendingInterest - remaining : BigInt(0);
       console.log(
-        `[KeeperBot] add_rewards called with ${Number(totalYield) / 1e7} XLM (lending: ${Number(harvested) / 1e7}, LP fees: ${Number(lpProtocolFees) / 1e7}) — sXLM rate will increase`
+        `[KeeperBot] Settled ${Number(settled) / 1e7} XLM of lending interest ` +
+          `(${Number(remaining) / 1e7} XLM still owed by borrowers): ${hash}`
       );
     } catch (err) {
-      console.error("[KeeperBot] add_rewards failed:", err);
-      console.error(
-        `[KeeperBot] MANUAL ACTION REQUIRED: call add_rewards with ${totalYield} stroops`
-      );
+      console.error("[KeeperBot] settle_interest failed:", err);
     }
   }
-
-  // ============================================================
-  // Query accrued interest from lending contract
-  // ============================================================
 
   private async queryLendingAccruedInterest(): Promise<bigint> {
     try {
@@ -172,33 +152,6 @@ export class KeeperBot {
       return result != null ? BigInt(result as string | number | bigint) : BigInt(0);
     } catch (err) {
       console.warn("[KeeperBot] Could not query accrued interest:", err);
-      return BigInt(0);
-    }
-  }
-
-  // ============================================================
-  // Call harvest_interest() on lending contract
-  // ============================================================
-
-  private async harvestLendingInterest(pendingBefore: bigint): Promise<bigint> {
-    try {
-      const hash = await this.executeAdminCall(
-        config.contracts.lendingContractId,
-        "harvest_interest",
-        []
-      );
-      console.log(`[KeeperBot] harvest_interest tx: ${hash}`);
-
-      // The contract harvests min(pending, pool_balance).
-      // Re-query after harvest to see how much is left; the difference is what was harvested.
-      const pendingAfter = await this.queryLendingAccruedInterest();
-      const harvested = pendingBefore > pendingAfter
-        ? pendingBefore - pendingAfter
-        : pendingBefore; // fallback if query fails
-
-      return harvested;
-    } catch (err) {
-      console.error("[KeeperBot] harvest_interest failed:", err);
       return BigInt(0);
     }
   }
@@ -218,7 +171,7 @@ export class KeeperBot {
 
     for (const c of contracts) {
       try {
-        await this.executeAdminCall(c.id, "bump_instance", []);
+        await this.executeKeeperCall(c.id, "bump_instance");
         console.log(`[KeeperBot] TTL bumped: ${c.name}`);
       } catch (err) {
         console.error(`[KeeperBot] TTL bump failed for ${c.name}:`, err);
@@ -255,38 +208,10 @@ export class KeeperBot {
   }
 
   // ============================================================
-  // Treasury recycling: withdraw protocol fees and pipe back as rewards
-  // ============================================================
-
-  async recycleTreasury(): Promise<void> {
-    try {
-      const treasuryBal = await getTreasuryBalance();
-
-      if (treasuryBal < TREASURY_RECYCLE_THRESHOLD) {
-        console.log(
-          `[KeeperBot] Treasury balance ${Number(treasuryBal) / 1e7} XLM below threshold (${Number(TREASURY_RECYCLE_THRESHOLD) / 1e7} XLM) — skipping recycle`
-        );
-        return;
-      }
-
-      console.log(`[KeeperBot] Recycling treasury: ${Number(treasuryBal) / 1e7} XLM`);
-
-      await callWithdrawFees(treasuryBal);
-      console.log(`[KeeperBot] Withdrew ${Number(treasuryBal) / 1e7} XLM from treasury`);
-
-      await callAddRewards(treasuryBal);
-      console.log(
-        `[KeeperBot] Recycled ${Number(treasuryBal) / 1e7} XLM treasury → add_rewards — stakers get ~100% of yield`
-      );
-    } catch (err) {
-      console.error("[KeeperBot] Treasury recycle failed:", err);
-    }
-  }
-
-  // ============================================================
   // Helpers
   // ============================================================
 
+  /** Read-only simulation. Needs an existing source account, not a signature. */
   private async simulateView(
     contractId: string,
     method: string,
@@ -295,8 +220,7 @@ export class KeeperBot {
     const contract = new Contract(contractId);
     const op = contract.call(method, ...args);
 
-    const keypair = Keypair.fromSecret(config.admin.secretKey);
-    const account = await this.server.getAccount(keypair.publicKey());
+    const account = await this.server.getAccount(config.admin.publicKey);
 
     const tx = new TransactionBuilder(account, {
       fee: BASE_FEE,
@@ -314,16 +238,12 @@ export class KeeperBot {
     return null;
   }
 
-  private async executeAdminCall(
-    contractId: string,
-    method: string,
-    args: ReturnType<typeof nativeToScVal>[]
-  ): Promise<string> {
-    const keypair = Keypair.fromSecret(config.admin.secretKey);
+  private async executeKeeperCall(contractId: string, method: KeeperMethod): Promise<string> {
+    const keypair = loadKeeperKeypair(config.keeper.secretKey, config.admin.publicKey);
     const account = await this.server.getAccount(keypair.publicKey());
 
     const contract = new Contract(contractId);
-    const op = contract.call(method, ...args);
+    const op = contract.call(method);
 
     const tx = new TransactionBuilder(account, {
       fee: BASE_FEE,

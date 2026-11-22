@@ -6,24 +6,27 @@ on 2026-08-31. Written against the system as deployed, not against an intended d
 ## Monitoring requirements
 
 One check runs today: the risk engine compares vault holdings against obligations every five minutes
-and pauses on a shortfall. Everything else below is a **requirement, not a deployed alert** — stated
+and alerts on a shortfall. Everything else below is a **requirement, not a deployed alert** — stated
 so the gap is visible rather than assumed closed.
 
 | Signal | Threshold | Why it matters | Status |
 |---|---|---|---|
-| Solvency | assets < obligations | The vault promising XLM it does not hold. Auto-pauses. | **live** |
+| Solvency | assets < obligations | The vault promising XLM it does not hold. Alerts the signers, who pause. | **live** |
 | Exchange rate | any fall | The rate can only fall on a loss. With no strategies deployed there is no legitimate cause, so any drop is a defect. | required |
 | Contract TTL | < 7 days | Archived contracts are uncallable until restored. Bumping depends on one backend. | required |
 | Keeper liveness | no run in 12h | Silent keeper failure is invisible; the first symptom is an archived contract weeks later. | required |
 | Reserve utilisation | > 85% | Approaching the 90% cap means borrowing stops and suppliers cannot exit. | required |
-| Admin key activity | any non-keeper call | The key can upgrade every contract. An unexpected signature is the earliest signal of compromise. | required |
+| Admin key activity | any transaction from the admin account | The admin can upgrade every contract. The keeper no longer signs as admin, so every admin transaction should match a planned signing session. | required |
 | Pending withdrawals | stale > 30 days | Unclaimed exits hold assets against burned shares. Three sat unclaimed for five months. | required |
 
 ## Keeper runbook
 
-The keeper signs with the admin key and runs three loops: TTL bumps every 24 hours, a harvest cycle
-every 6 hours, and a solvency check every 5 minutes. It cannot move user funds — it calls fixed
-entrypoints only.
+The keeper signs with its own key (`KEEPER_SECRET_KEY`), never the admin's, and only calls
+permissionless entrypoints: `bump_instance` on all five contracts every 24 hours, and
+`collect_protocol_fees` and `settle_interest` every 6 hours. The risk engine runs a solvency check
+every 5 minutes. Neither can move user funds or change parameters. The backend refuses to start the
+keeper with the admin key, and `tests/keeper.test.ts` checks every keeper method against the
+contract source for `require_auth`.
 
 **Confirm it is alive.** Contract TTLs rising is the only proof that matters; logs can lie about work
 that failed silently.
@@ -54,7 +57,8 @@ and nobody gains by doing so.
 
 ### Solvency shortfall
 
-The risk engine pauses automatically. **Do not unpause to restore service.** Establish first whether
+The risk engine alerts through the configured webhooks; it does not pause or unpause. Two signers
+pause the vault (see *Signing an admin call* below). **Do not unpause to restore service.** Establish first whether
 assets genuinely fell or a number is wrong — with assets derived from balances, a shortfall means the
 contract is really short, not that a counter drifted.
 
@@ -64,13 +68,71 @@ reopening; a contribution via `add_rewards` raises the rate for everyone and clo
 
 ### Admin key compromise
 
-**There is no recovery path today.** One signature can upgrade all five contracts. If it is
-compromised, an attacker replaces the code and everything else is irrelevant. Pause immediately if
-you still can, then `set_admin` to a safe account on all five — you are racing whoever else holds the
-key.
+**Before the multisig conversion there is no recovery path.** One signature can upgrade all five
+contracts. Only the vault and the token have `set_admin`; lending, LP pool and governance can change
+admin only by upgrade. The fastest response is to convert the admin account in place (next section),
+which takes the leaked key's weight to 0 on all five contracts in one transaction — you are racing
+whoever else holds the key.
 
-This is why moving to a multisig is the highest-value outstanding change. It converts an
-unrecoverable event into a survivable one.
+**After the conversion,** one leaked signer key cannot act alone. Two remaining signers remove it
+with `set_options` (signer weight 0) and add a replacement. Nothing changes on the contracts.
+
+## Admin multisig
+
+The admin account `GDWXTIIR…VZ5N` is converted to a multisig in place. Contracts check the admin
+with `require_auth`, which a classic account satisfies through its own signers and thresholds, so
+no contract changes and no admin address changes.
+
+Plan: three signers of weight 1, threshold 2 for low, medium and high, master key weight 0.
+`backend/multisig-plan.example.json` shows the format.
+
+### Conversion
+
+Rehearse every step on testnet against a replica admin account before mainnet.
+
+1. Move the keeper to its own funded account and set `KEEPER_SECRET_KEY`. Confirm one TTL bump lands
+   from the keeper's address.
+2. Validate the plan. It refuses any plan where the signers cannot reach the threshold, where losing
+   one key would lock the account, or where one signer could act alone.
+   ```bash
+   cd backend
+   npm run multisig -- check plan.json
+   ```
+3. Build the unsigned transaction: one `set_options` per signer, then one that sets the thresholds
+   and the master weight to 0. Valid for one hour.
+   ```bash
+   npm run multisig -- build plan.json
+   ```
+4. Sign the XDR with the current admin key, offline, and submit it.
+   ```bash
+   stellar tx sign --sign-with-key current-admin --network mainnet < convert.xdr > convert.signed.xdr
+   stellar tx send --network mainnet < convert.signed.xdr
+   ```
+5. Verify the account on chain matches the plan.
+   ```bash
+   npm run multisig -- verify plan.json
+   ```
+6. Prove the signing path with a no-op admin call: `upgrade` each contract to its current WASM hash
+   (see the deployment register), signed by two signers.
+7. Remove `ADMIN_SECRET_KEY` from every environment and record the signers in the deployment
+   register.
+
+### Signing an admin call
+
+Build the call with the admin as source account, simulate it, collect two signatures, submit.
+
+```bash
+stellar contract invoke --id $VAULT --network mainnet \
+  --source-account $ADMIN_PUBLIC_KEY --build-only -- pause > pause.xdr
+stellar tx simulate --network mainnet < pause.xdr > pause.sim.xdr
+stellar tx sign --sign-with-key signer-a --network mainnet < pause.sim.xdr > pause.a.xdr
+stellar tx sign --sign-with-key signer-b --network mainnet < pause.a.xdr > pause.ab.xdr
+stellar tx send --network mainnet < pause.ab.xdr
+```
+
+The admin authorises as the transaction source, so the envelope signatures satisfy `require_auth`
+once their weight meets the account's threshold. The testnet rehearsal confirms this for `pause`,
+`unpause`, `upgrade` and `set_governance` before mainnet.
 
 ### RPC or backend outage
 
@@ -95,7 +157,7 @@ then never retried. Only the holder can sign the claim.
 | Reentrancy | guarded | Flash loans block deposits, withdrawals and claims for their duration |
 | Storage migration | proven | Keys shown name-addressed by test, so removed variants orphan safely |
 | **Source verification** | **not done** | **Blocker.** Deployed bytecode cannot be matched to this repository. Free; one hour. |
-| **Key custody** | **single key** | **Blocker.** An auditor will open here. Multisig converts it from a finding to a control. |
+| **Key custody** | **single key** | **Blocker.** Conversion tooling and runbook are ready (*Admin multisig*); the mainnet conversion has not run. |
 | External audit | none | Protocol is live and unaudited; documentation states this plainly |
 | Withdrawal queue scale | known limit | One entry holds all requests; fails in the hundreds. Unreachable while nothing is deployed externally. |
 

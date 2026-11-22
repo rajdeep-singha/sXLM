@@ -1,7 +1,5 @@
 import { PrismaClient } from "@prisma/client";
 import {
-  callPause,
-  callUnpause,
   getIdleBalance,
   getPendingWithdrawals,
   getTreasuryBalance,
@@ -22,6 +20,11 @@ const CHECK_INTERVAL_MS = 5 * 60 * 1000;
  *
  * Strategy exposure and collateral concentration are not monitored; they need
  * the strategy registry before they can be measured.
+ *
+ * It alerts and does not act. Pausing is an admin action, and the admin is a
+ * multisig account: on a shortfall, the signers pause the vault themselves.
+ * It also never unpauses: reopening after a shortfall needs a person to
+ * establish why assets fell, not a balance that happens to read healthy again.
  */
 export class RiskEngine {
   private prisma: PrismaClient;
@@ -77,8 +80,7 @@ export class RiskEngine {
       getIsPaused(),
     ]);
 
-    const liabilities = assets + pending + treasury;
-    const shortfall = liabilities - idle;
+    const { liabilities, shortfall } = assessSolvency({ idle, pending, treasury, assets });
 
     if (shortfall > BigInt(0)) {
       console.error(
@@ -88,17 +90,12 @@ export class RiskEngine {
 
       if (!this.emergencyMode) {
         this.emergencyMode = true;
-        if (!paused) {
-          try {
-            await callPause();
-            console.error("[RiskEngine] Protocol paused on solvency shortfall");
-          } catch (err) {
-            console.error("[RiskEngine] Pause failed:", err);
-          }
-        }
         await this.notify(
           "SOLVENCY",
-          `Vault is short ${fmt(shortfall)} XLM against its obligations. Protocol paused.`
+          `Vault is short ${fmt(shortfall)} XLM against its obligations. ` +
+            (paused
+              ? "Vault is already paused."
+              : "ACTION REQUIRED: pause the vault through the admin multisig (docs/OPERATIONS.md).")
         );
       }
       return;
@@ -106,15 +103,10 @@ export class RiskEngine {
 
     if (this.emergencyMode) {
       this.emergencyMode = false;
-      if (paused) {
-        try {
-          await callUnpause();
-          console.log("[RiskEngine] Solvency restored — protocol unpaused");
-        } catch (err) {
-          console.error("[RiskEngine] Unpause failed:", err);
-        }
-      }
-      await this.notify("SOLVENCY", "Vault is solvent again. Protocol unpaused.");
+      await this.notify(
+        "SOLVENCY",
+        "Vault reads solvent again. It stays paused until the signers establish the cause and unpause."
+      );
     }
 
     const rate = supply > BigInt(0) ? Number(assets) / Number(supply) : 1;
@@ -124,22 +116,56 @@ export class RiskEngine {
   }
 
   private async notify(kind: string, message: string): Promise<void> {
-    const url = config.webhooks.governanceUrl;
-    if (!url) return;
-    try {
-      await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, message, timestamp: Date.now() }),
-      });
-    } catch (err) {
-      console.warn("[RiskEngine] Notification failed:", err);
+    const posts: Promise<Response>[] = [];
+    if (config.webhooks.governanceUrl) {
+      posts.push(
+        fetch(config.webhooks.governanceUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind, message, timestamp: Date.now() }),
+        })
+      );
+    }
+    if (config.webhooks.slackUrl) {
+      posts.push(
+        fetch(config.webhooks.slackUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: `[${kind}] ${message}` }),
+        })
+      );
+    }
+    if (posts.length === 0) {
+      console.warn(`[RiskEngine] No webhook configured; alert not delivered: ${message}`);
+      return;
+    }
+    const results = await Promise.allSettled(posts);
+    for (const r of results) {
+      if (r.status === "rejected") {
+        console.warn("[RiskEngine] Notification failed:", r.reason);
+      }
     }
   }
 
   isEmergencyMode(): boolean {
     return this.emergencyMode;
   }
+}
+
+/**
+ * What the vault owes against what it holds.
+ *
+ * `assets` is what share holders can redeem; queued withdrawals and accrued
+ * fees are owed on top of it. All of it must be covered by the idle balance.
+ */
+export function assessSolvency(input: {
+  idle: bigint;
+  pending: bigint;
+  treasury: bigint;
+  assets: bigint;
+}): { liabilities: bigint; shortfall: bigint } {
+  const liabilities = input.assets + input.pending + input.treasury;
+  return { liabilities, shortfall: liabilities - input.idle };
 }
 
 function fmt(stroops: bigint): string {
