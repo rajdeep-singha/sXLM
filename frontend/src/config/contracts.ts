@@ -1,8 +1,39 @@
+const MAINNET_PASSPHRASE = 'Public Global Stellar Network ; September 2015';
+const networkPassphrase: string = import.meta.env.VITE_NETWORK_PASSPHRASE || MAINNET_PASSPHRASE;
+const onMainnet = networkPassphrase === MAINNET_PASSPHRASE;
+
+/**
+ * Ordered endpoint list: the comma-separated `*_URLS` variable if set, else
+ * the single `*_URL` variable followed (on mainnet only) by public fallbacks.
+ */
+function endpoints(list: string | undefined, single: string | undefined, fallbacks: string[]): string[] {
+  const urls = list ? list.split(',') : [single ?? '', ...(onMainnet ? fallbacks : [])];
+  return [...new Set(urls.map((u) => u.trim()).filter(Boolean))];
+}
+
+const sorobanRpcUrls = endpoints(
+  import.meta.env.VITE_SOROBAN_RPC_URLS,
+  import.meta.env.VITE_SOROBAN_RPC_URL,
+  [
+    'https://soroban-rpc.mainnet.stellar.gateway.fm',
+    'https://mainnet.sorobanrpc.com',
+    'https://rpc.lightsail.network',
+  ],
+);
+const horizonUrls = endpoints(
+  import.meta.env.VITE_HORIZON_URLS,
+  import.meta.env.VITE_HORIZON_URL,
+  ['https://horizon.stellar.org', 'https://horizon.stellar.lobstr.co'],
+);
+
 export const NETWORK = {
   name: import.meta.env.VITE_NETWORK_NAME || 'MAINNET',
-  networkPassphrase: import.meta.env.VITE_NETWORK_PASSPHRASE || 'Public Global Stellar Network ; September 2015',
-  horizonUrl: import.meta.env.VITE_HORIZON_URL || 'https://horizon.stellar.org',
-  sorobanRpcUrl: import.meta.env.VITE_SOROBAN_RPC_URL || 'https://soroban-rpc.mainnet.stellar.gateway.fm',
+  networkPassphrase,
+  /** Primary endpoints. Calls go through lib/stellarNetwork.ts, which fails over. */
+  horizonUrl: horizonUrls[0] ?? 'https://horizon.stellar.org',
+  sorobanRpcUrl: sorobanRpcUrls[0] ?? 'https://soroban-rpc.mainnet.stellar.gateway.fm',
+  horizonUrls,
+  sorobanRpcUrls,
   friendbotUrl: '',
 } as const;
 
@@ -20,9 +51,6 @@ export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:30
 export const PROTOCOL_CONFIG = {
   minStakeAmount: 1,
   maxStakeAmount: 1_000_000,
-  // Cooldown before a queued withdrawal can be claimed. Set on-chain in
-  // ledgers; read get_cooldown_period() for the authoritative value.
-  cooldownHours: 24,
   instantWithdrawFeePercent: 0.5,
   decimals: 7,
   xlmDecimals: 7,

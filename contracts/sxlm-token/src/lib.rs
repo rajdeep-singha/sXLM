@@ -5,6 +5,9 @@ use soroban_sdk::{
 };
 use soroban_token_sdk::TokenUtils;
 
+/// Storage layout version, reported by `version()`.
+const CONTRACT_VERSION: u32 = 3;
+
 // ---------- TTL constants ----------
 // Testnet: ~5s per ledger
 // 30 days  ≈  518_400 ledgers
@@ -304,12 +307,19 @@ impl SxlmToken {
         env.storage().instance().get(&DataKey::Governance).expect("governance not configured")
     }
 
-    /// Transfer admin role.
+    /// Transfer the admin role. Both the current and the new admin must sign,
+    /// so a typo cannot hand the contract to an address nobody controls.
     pub fn set_admin(env: Env, new_admin: Address) {
         let admin = read_admin(&env);
         admin.require_auth();
+        new_admin.require_auth();
         extend_instance(&env);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish((soroban_sdk::symbol_short!("admin"),), (admin, new_admin));
+    }
+
+    pub fn version(_env: Env) -> u32 {
+        CONTRACT_VERSION
     }
 
     pub fn minter(env: Env) -> Address {
@@ -325,6 +335,7 @@ impl SxlmToken {
 
 #[cfg(test)]
 mod test {
+    extern crate std;
     use super::*;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{Env, String};
@@ -449,5 +460,25 @@ mod test {
         assert_eq!(client.minter(), minter);
         client.set_minter(&new_minter);
         assert_eq!(client.minter(), new_minter);
+    }
+
+    #[test]
+    fn reports_version_3() {
+        let env = Env::default();
+        let (client, _, _) = setup_token(&env);
+        assert_eq!(client.version(), 3);
+    }
+
+    #[test]
+    fn admin_rotation_needs_both_keys() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, _) = setup_token(&env);
+        let next = Address::generate(&env);
+        client.set_admin(&next);
+        let signers: std::vec::Vec<Address> = env.auths().iter().map(|a| a.0.clone()).collect();
+        assert!(signers.contains(&admin));
+        assert!(signers.contains(&next));
+        assert_eq!(client.admin(), next);
     }
 }

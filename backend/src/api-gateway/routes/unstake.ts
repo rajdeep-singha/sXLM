@@ -12,6 +12,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { PrismaClient } from "@prisma/client";
 import { config } from "../../config/index.js";
+import { getRpc } from "../../stellar/network.js";
 import { StakingEngine } from "../../vault-engine/index.js";
 
 const unstakeSchema = z.object({
@@ -109,7 +110,7 @@ export const unstakeRoutes: FastifyPluginAsync<{ stakingEngine: StakingEngine; p
   opts
 ) => {
   const { stakingEngine, prisma } = opts;
-  const server = new rpc.Server(config.stellar.rpcUrl);
+  const server = getRpc();
 
   /**
    * GET /balance/:address

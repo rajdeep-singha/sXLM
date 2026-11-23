@@ -1,6 +1,6 @@
 [package]
 name = "sxlm-lending"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 
 [lib]
@@ -12,3 +12,4 @@ soroban-token-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+proptest = { version = "1.5", default-features = false, features = ["std"] }

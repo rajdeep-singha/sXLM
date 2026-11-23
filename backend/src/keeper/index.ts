@@ -26,6 +26,7 @@ import {
   BASE_FEE,
 } from "@stellar/stellar-sdk";
 import { config } from "../config/index.js";
+import { getRpc } from "../stellar/network.js";
 import { getLpAccruedProtocolFees } from "../vault-engine/contractClient.js";
 import { loadKeeperKeypair } from "./keys.js";
 
@@ -48,11 +49,27 @@ export type KeeperMethod = (typeof KEEPER_METHODS)[number];
 let keeperInterval: ReturnType<typeof setInterval> | null = null;
 let ttlInterval: ReturnType<typeof setInterval> | null = null;
 
+export interface KeeperStatus {
+  running: boolean;
+  account: string | null;
+  lastUpkeepAt: string | null;
+  lastTtlBumpAt: string | null;
+  /** Calls that failed in the most recent cycles, by method and contract. */
+  lastErrors: string[];
+}
+
 export class KeeperBot {
   private server: rpc.Server;
+  private readonly state: KeeperStatus = {
+    running: false,
+    account: null,
+    lastUpkeepAt: null,
+    lastTtlBumpAt: null,
+    lastErrors: [],
+  };
 
   constructor() {
-    this.server = new rpc.Server(config.stellar.rpcUrl);
+    this.server = getRpc();
   }
 
   async initialize(): Promise<void> {
@@ -61,6 +78,8 @@ export class KeeperBot {
     // Fail fast on a missing key, or on the admin key, before scheduling anything.
     const keypair = loadKeeperKeypair(config.keeper.secretKey, config.admin.publicKey);
     console.log(`[KeeperBot] Signing as ${keypair.publicKey()}`);
+    this.state.account = keypair.publicKey();
+    this.state.running = true;
 
     await this.runUpkeepCycle().catch((err) =>
       console.error("[KeeperBot] Initial upkeep cycle failed:", err)
@@ -93,7 +112,17 @@ export class KeeperBot {
   async shutdown(): Promise<void> {
     if (keeperInterval) { clearInterval(keeperInterval); keeperInterval = null; }
     if (ttlInterval) { clearInterval(ttlInterval); ttlInterval = null; }
+    this.state.running = false;
     console.log("[KeeperBot] Shut down");
+  }
+
+  status(): KeeperStatus {
+    return { ...this.state, lastErrors: [...this.state.lastErrors] };
+  }
+
+  private recordError(what: string, err: unknown): void {
+    const msg = `${new Date().toISOString()} ${what}: ${err instanceof Error ? err.message : String(err)}`;
+    this.state.lastErrors = [msg, ...this.state.lastErrors].slice(0, 10);
   }
 
   // ============================================================
@@ -118,9 +147,11 @@ export class KeeperBot {
       }
     } catch (err) {
       console.warn("[KeeperBot] LP protocol fee collection failed:", err);
+      this.recordError("collect_protocol_fees", err);
     }
 
     const pendingInterest = await this.queryLendingAccruedInterest();
+    this.state.lastUpkeepAt = new Date().toISOString();
     if (pendingInterest <= BigInt(0)) {
       console.log("[KeeperBot] No lending interest to settle");
       return;
@@ -139,6 +170,7 @@ export class KeeperBot {
       );
     } catch (err) {
       console.error("[KeeperBot] settle_interest failed:", err);
+      this.recordError("settle_interest", err);
     }
   }
 
@@ -169,14 +201,20 @@ export class KeeperBot {
       { name: "Governance",  id: config.contracts.governanceContractId },
     ];
 
+    let bumped = 0;
     for (const c of contracts) {
       try {
         await this.executeKeeperCall(c.id, "bump_instance");
         console.log(`[KeeperBot] TTL bumped: ${c.name}`);
+        bumped += 1;
       } catch (err) {
         console.error(`[KeeperBot] TTL bump failed for ${c.name}:`, err);
+        this.recordError(`bump_instance ${c.name}`, err);
         // Non-fatal: log and continue
       }
+    }
+    if (bumped === contracts.length) {
+      this.state.lastTtlBumpAt = new Date().toISOString();
     }
   }
 

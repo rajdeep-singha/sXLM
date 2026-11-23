@@ -9,6 +9,7 @@ import {
   BASE_FEE,
 } from "@stellar/stellar-sdk";
 import { config } from "../../config/index.js";
+import { getRpc } from "../../stellar/network.js";
 import { StakingEngine } from "../../vault-engine/index.js";
 
 const stakeSchema = z.object({
@@ -21,7 +22,7 @@ export const stakeRoutes: FastifyPluginAsync<{ stakingEngine: StakingEngine }> =
   opts
 ) => {
   const { stakingEngine } = opts;
-  const server = new rpc.Server(config.stellar.rpcUrl);
+  const server = getRpc();
 
   /**
    * POST /staking/stake

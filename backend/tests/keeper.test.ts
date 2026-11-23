@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Keypair } from "@stellar/stellar-sdk";
 import { loadKeeperKeypair } from "../src/keeper/keys.js";
 import { KEEPER_METHODS } from "../src/keeper/index.js";
-import { assessSolvency } from "../src/risk-engine/index.js";
+import { checkSolvency } from "../src/monitor/checks.js";
 
 const CONTRACTS_DIR = fileURLToPath(new URL("../../contracts", import.meta.url));
 
@@ -78,15 +78,39 @@ describe("Keeper calls", () => {
   });
 });
 
-describe("Solvency assessment", () => {
-  it("reports no shortfall when holdings cover obligations", () => {
-    const r = assessSolvency({ idle: 100n, assets: 80n, pending: 15n, treasury: 5n });
-    expect(r.liabilities).toBe(100n);
-    expect(r.shortfall).toBe(0n);
+describe("Solvency check", () => {
+  it("is quiet when holdings cover obligations", () => {
+    expect(checkSolvency({ idle: 100n, assets: 80n, pending: 15n, treasury: 5n })).toEqual([]);
   });
 
   it("reports the gap when obligations exceed holdings", () => {
-    const r = assessSolvency({ idle: 90n, assets: 80n, pending: 15n, treasury: 5n });
-    expect(r.shortfall).toBe(10n);
+    const [f] = checkSolvency({ idle: 90n, assets: 80n, pending: 15n, treasury: 5n });
+    expect(f?.name).toBe("solvency");
+    expect(f?.severity).toBe("critical");
+    expect(f?.message).toContain("short 0.0000010 XLM");
+  });
+});
+
+import { pickWithdrawal } from "../src/vault-engine/withdrawalLookup.js";
+
+describe("Choosing which withdrawal to claim", () => {
+  const open = [
+    { id: 1, user: "A", xlmAmount: 1n, unlockLedger: 100 },
+    { id: 3, user: "A", xlmAmount: 1n, unlockLedger: 300 },
+    { id: 7, user: "A", xlmAmount: 1n, unlockLedger: 50 },
+  ];
+
+  it("returns nothing when there is nothing open", () => {
+    expect(pickWithdrawal([], 1_000)).toBeNull();
+  });
+
+  it("honours a named id only when it is one of the user's open requests", () => {
+    expect(pickWithdrawal(open, 1_000, 3)?.id).toBe(3);
+    expect(pickWithdrawal(open, 1_000, 99)?.id).toBe(1);
+  });
+
+  it("prefers the oldest unlocked request, else the oldest for the cooldown message", () => {
+    expect(pickWithdrawal(open, 60)?.id).toBe(7);
+    expect(pickWithdrawal(open.slice(0, 2), 10)?.id).toBe(1);
   });
 });

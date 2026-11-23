@@ -4,11 +4,7 @@ import {
   stopPeriodicRefresh as stopExchangeRateRefresh,
   getCurrentRate,
 } from "./exchangeRateManager.js";
-import {
-  startWithdrawalQueueProcessor,
-  stopWithdrawalQueueProcessor,
-  getQueueStats,
-} from "./withdrawalQueueProcessor.js";
+import { getQueueStats } from "./withdrawalStats.js";
 import {
   getTotalStaked,
   getTotalSupply,
@@ -29,7 +25,6 @@ export class StakingEngine {
   async initialize(): Promise<void> {
     console.log("[StakingEngine] Initializing...");
     startExchangeRateRefresh();
-    startWithdrawalQueueProcessor(this.prisma);
 
     // Subscribe to slashing events → recalculate withdrawal queue
     const eventBus = getEventBus();
@@ -44,7 +39,6 @@ export class StakingEngine {
   async shutdown(): Promise<void> {
     console.log("[StakingEngine] Shutting down...");
     stopExchangeRateRefresh();
-    stopWithdrawalQueueProcessor();
     console.log("[StakingEngine] Shut down");
   }
 

@@ -1,13 +1,9 @@
 import { useState, useCallback, useEffect } from 'react';
-import { rpc, Contract, Address, TransactionBuilder, BASE_FEE, scValToNative } from '@stellar/stellar-sdk';
+import { Address } from '@stellar/stellar-sdk';
+import { horizonGet, readContract } from '../lib/stellarNetwork';
 import axios from '../lib/apiClient';
-import { API_BASE_URL, NETWORK, CONTRACTS } from '../config/contracts';
+import { API_BASE_URL } from '../config/contracts';
 import { useWallet } from './useWallet';
-
-// Admin public key used as source for read-only Soroban simulations.
-// It's a known active account on mainnet — the user's own account may not
-// be loadable by getAccount() before their first Soroban interaction.
-const SIMULATION_SOURCE = 'GDWXTIIROGCVBSNQMBJFH6HOWQ4YSRVMKSUS53CH6MP56WSWD6J4VZ5N';
 
 // Hardcoded mainnet sXLM token contract ID — do NOT use CONTRACTS.sxlmToken here
 // because VITE_SXLM_TOKEN_CONTRACT_ID may be misconfigured in the deployment env.
@@ -73,8 +69,7 @@ export function useStaking(): UseStakingReturn {
     try {
       // Fetch Horizon account (native XLM) and backend (exchange rate) in parallel
       const [accountRes, apiRes] = await Promise.all([
-        fetch(`${NETWORK.horizonUrl}/accounts/${publicKey}`)
-          .then((r) => (r.ok ? r.json() : null))
+        horizonGet<{ balances: { asset_type: string; balance: string }[] }>(`/accounts/${publicKey}`)
           .catch(() => null),
         axios.get(`${API_BASE_URL}/api/balance/${publicKey}`).catch(() => null),
       ]);
@@ -95,21 +90,8 @@ export function useStaking(): UseStakingReturn {
       // Uses SXLM_TOKEN_CONTRACT constant (not CONTRACTS.sxlmToken) to avoid env-var misconfiguration.
       let sxlmBalance = 0;
       try {
-        const soroban = new rpc.Server(NETWORK.sorobanRpcUrl);
-        const account = await soroban.getAccount(SIMULATION_SOURCE);
-        const tx = new TransactionBuilder(account, {
-          fee: BASE_FEE,
-          networkPassphrase: NETWORK.networkPassphrase,
-        })
-          .addOperation(
-            new Contract(SXLM_TOKEN_CONTRACT).call('balance', new Address(publicKey).toScVal())
-          )
-          .setTimeout(30)
-          .build();
-        const sim = await soroban.simulateTransaction(tx);
-        if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
-          sxlmBalance = Number(scValToNative(sim.result.retval)) / 1e7;
-        }
+        const raw = await readContract(SXLM_TOKEN_CONTRACT, 'balance', [new Address(publicKey).toScVal()]);
+        sxlmBalance = Number(raw) / 1e7;
       } catch {
         // Fall back to backend value if Soroban read fails
         sxlmBalance = apiRes?.data?.sxlmBalance ?? 0;

@@ -10,6 +10,7 @@ import {
   BASE_FEE,
 } from "@stellar/stellar-sdk";
 import { config } from "../../config/index.js";
+import { getRpc } from "../../stellar/network.js";
 import { PrismaClient } from "@prisma/client";
 
 const amountSchema = z.object({
@@ -109,7 +110,7 @@ export const lendingRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = async
   opts
 ) => {
   const { prisma } = opts;
-  const server = new rpc.Server(config.stellar.rpcUrl);
+  const server = getRpc();
   const lendingContractId = config.contracts.lendingContractId;
 
   /**

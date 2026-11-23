@@ -4,6 +4,9 @@ use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, 
 
 const BPS_DENOMINATOR: i128 = 10_000;
 const RATE_PRECISION: i128 = 10_000_000; // 1e7
+
+/// Storage layout version, reported by `version()`.
+const CONTRACT_VERSION: u32 = 3;
 const DEFAULT_LIQUIDATION_BONUS_BPS: i128 = 500; // 5% bonus
 
 /// Ceiling on how much of the lending reserve may be lent out at once.
@@ -307,6 +310,52 @@ fn compute_health_factor(
     (collateral * exchange_rate * factor_bps) / (BPS_DENOMINATOR * borrowed)
 }
 
+/// Validate and store one governable parameter.
+///
+/// Every route that changes a parameter ends here: `set_param` (governance)
+/// and the older `update_*` entrypoints alike, so the authority check and the
+/// bounds are the same whichever one is called.
+///
+/// Interest is accrued first. The index is advanced at the rate in force for
+/// the time that has already passed; without this, a new borrow rate would be
+/// applied back to the last accrual.
+fn apply_param(env: &Env, key: Symbol, value: i128) {
+    accrue_interest(env);
+
+    if key == soroban_sdk::symbol_short!("coll_fact") {
+        assert!(value > 0 && value <= BPS_DENOMINATOR, "collateral factor out of range");
+        assert!(
+            value <= read_liquidation_threshold(env),
+            "collateral factor above liquidation threshold"
+        );
+        env.storage().instance().set(&DataKey::CollateralFactorBps, &value);
+    } else if key == soroban_sdk::symbol_short!("liq_thres") {
+        assert!(value > 0 && value <= BPS_DENOMINATOR, "threshold out of range");
+        assert!(
+            value >= read_collateral_factor(env),
+            "liquidation threshold below collateral factor"
+        );
+        env.storage().instance().set(&DataKey::LiquidationThresholdBps, &value);
+    } else if key == soroban_sdk::symbol_short!("bor_rate") {
+        assert!(value >= 0 && value <= BPS_DENOMINATOR, "borrow rate out of range");
+        env.storage().instance().set(&DataKey::BorrowRateBps, &value);
+    } else if key == soroban_sdk::symbol_short!("liq_fee") {
+        // Capped below the seizure bonus so liquidating always pays.
+        assert!(value >= 0 && value < read_liquidation_bonus(env), "liquidation fee too high");
+        env.storage().instance().set(&DataKey::LiquidationFeeBps, &value);
+    } else if key == soroban_sdk::symbol_short!("vlt_share") {
+        assert!(value >= 0 && value <= BPS_DENOMINATOR, "vault share out of range");
+        env.storage().instance().set(&DataKey::VaultShareBps, &value);
+    } else if key == soroban_sdk::symbol_short!("max_util") {
+        assert!(value > 0 && value <= BPS_DENOMINATOR, "utilization out of range");
+        env.storage().instance().set(&DataKey::MaxUtilizationBps, &value);
+    } else {
+        panic!("unknown parameter");
+    }
+
+    env.events().publish((soroban_sdk::symbol_short!("param"),), (key, value));
+}
+
 #[contract]
 pub struct LendingContract;
 
@@ -450,41 +499,20 @@ impl LendingContract {
     pub fn set_param(env: Env, key: Symbol, value: i128) {
         require_param_authority(&env);
         extend_instance(&env);
-
-        if key == soroban_sdk::symbol_short!("coll_fact") {
-            assert!(value > 0 && value <= BPS_DENOMINATOR, "collateral factor out of range");
-            env.storage().instance().set(&DataKey::CollateralFactorBps, &value);
-        } else if key == soroban_sdk::symbol_short!("liq_thres") {
-            assert!(value > 0 && value <= BPS_DENOMINATOR, "threshold out of range");
-            env.storage().instance().set(&DataKey::LiquidationThresholdBps, &value);
-        } else if key == soroban_sdk::symbol_short!("bor_rate") {
-            assert!(value >= 0 && value <= BPS_DENOMINATOR, "borrow rate out of range");
-            env.storage().instance().set(&DataKey::BorrowRateBps, &value);
-        } else if key == soroban_sdk::symbol_short!("liq_fee") {
-            // Capped below the seizure bonus so liquidating always pays.
-            assert!(value >= 0 && value < read_liquidation_bonus(&env), "liquidation fee too high");
-            env.storage().instance().set(&DataKey::LiquidationFeeBps, &value);
-        } else if key == soroban_sdk::symbol_short!("vlt_share") {
-            assert!(value >= 0 && value <= BPS_DENOMINATOR, "vault share out of range");
-            env.storage().instance().set(&DataKey::VaultShareBps, &value);
-        } else if key == soroban_sdk::symbol_short!("max_util") {
-            assert!(value > 0 && value <= BPS_DENOMINATOR, "utilization out of range");
-            env.storage().instance().set(&DataKey::MaxUtilizationBps, &value);
-        } else {
-            panic!("unknown parameter");
-        }
-
-        env.events().publish((soroban_sdk::symbol_short!("param"),), (key, value));
+        apply_param(&env, key, value);
     }
 
-    /// Update the recursion cap. Only callable by admin.
+    // The four `update_*` entrypoints below predate governance. They are kept
+    // so existing callers keep working, but they now carry exactly the power of
+    // `set_param`: the governance contract once configured, the admin until
+    // then. Before version 3 they accepted the admin key regardless, which left
+    // a way around every passed vote.
+
+    /// Update the reserve utilisation cap.
     pub fn update_max_utilization(env: Env, new_bps: u32) {
-        let admin = read_admin(&env);
-        admin.require_auth();
-        assert!(new_bps > 0 && new_bps <= 10000, "invalid utilization cap");
+        require_param_authority(&env);
         extend_instance(&env);
-        env.storage().instance().set(&DataKey::MaxUtilizationBps, &(new_bps as i128));
-        env.events().publish((soroban_sdk::symbol_short!("util_upd"),), new_bps);
+        apply_param(&env, soroban_sdk::symbol_short!("max_util"), new_bps as i128);
     }
 
     pub fn get_max_utilization(env: Env) -> i128 {
@@ -492,35 +520,44 @@ impl LendingContract {
         read_max_utilization(&env)
     }
 
-    /// Update the collateral factor. Only callable by admin.
+    /// Update the collateral factor.
     pub fn update_collateral_factor(env: Env, new_cf_bps: u32) {
-        let admin = read_admin(&env);
-        admin.require_auth();
-        assert!(new_cf_bps > 0 && new_cf_bps <= 10000, "invalid collateral factor");
+        require_param_authority(&env);
         extend_instance(&env);
-        env.storage().instance().set(&DataKey::CollateralFactorBps, &(new_cf_bps as i128));
-
-        env.events().publish(
-            (soroban_sdk::symbol_short!("cf_upd"),),
-            new_cf_bps,
-        );
+        apply_param(&env, soroban_sdk::symbol_short!("coll_fact"), new_cf_bps as i128);
     }
 
-    /// Update the liquidation threshold. Only callable by admin.
+    /// Update the liquidation threshold.
     pub fn update_liquidation_threshold(env: Env, new_lt_bps: u32) {
-        let admin = read_admin(&env);
-        admin.require_auth();
-        assert!(new_lt_bps > 0 && new_lt_bps <= 10000, "invalid liquidation threshold");
+        require_param_authority(&env);
         extend_instance(&env);
-        env.storage().instance().set(&DataKey::LiquidationThresholdBps, &(new_lt_bps as i128));
+        apply_param(&env, soroban_sdk::symbol_short!("liq_thres"), new_lt_bps as i128);
     }
 
-    /// Update the borrow rate. Only callable by admin.
+    /// Update the borrow rate.
     pub fn update_borrow_rate(env: Env, new_rate_bps: u32) {
+        require_param_authority(&env);
+        extend_instance(&env);
+        apply_param(&env, soroban_sdk::symbol_short!("bor_rate"), new_rate_bps as i128);
+    }
+
+    /// Transfer the admin role. Both the current and the new admin must sign.
+    pub fn set_admin(env: Env, new_admin: Address) {
         let admin = read_admin(&env);
         admin.require_auth();
+        new_admin.require_auth();
         extend_instance(&env);
-        env.storage().instance().set(&DataKey::BorrowRateBps, &(new_rate_bps as i128));
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish((soroban_sdk::symbol_short!("admin"),), (admin, new_admin));
+    }
+
+    pub fn admin(env: Env) -> Address {
+        extend_instance(&env);
+        read_admin(&env)
+    }
+
+    pub fn version(_env: Env) -> u32 {
+        CONTRACT_VERSION
     }
 
     // ==========================================================
@@ -709,8 +746,12 @@ impl LendingContract {
         let total_collateral = read_i128(&env, &DataKey::TotalCollateral);
         // Only subtract the seized amount; remaining_collateral stays in contract attributed to borrower
         write_i128(&env, &DataKey::TotalCollateral, total_collateral - collateral_to_send);
-        let total_borrowed = read_i128(&env, &DataKey::TotalBorrowed);
-        write_i128(&env, &DataKey::TotalBorrowed, total_borrowed - borrowed);
+        // `borrowed` includes accrued interest, so it is compared against the
+        // indexed total, not the scaled figure in storage. Subtracting it from
+        // the scaled figure (as versions before 3 did) removed more than the
+        // debt once the index rose above 1.0.
+        let total_after = read_total_borrowed(&env) - borrowed;
+        write_total_borrowed(&env, if total_after < 0 { 0 } else { total_after });
 
         write_user_collateral(&env, &borrower, remaining_collateral);
         write_user_borrowed(&env, &borrower, 0);
@@ -827,6 +868,7 @@ pub trait VaultInterface {
 
 #[cfg(test)]
 mod test {
+    extern crate std;
     use super::*;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::testutils::Ledger;
@@ -867,6 +909,13 @@ mod test {
     fn setup_with_vault() -> (Env, Address, Address, Address, Address, Address, Address, Address) {
         let env = Env::default();
         env.mock_all_auths();
+        // Tests advance the ledger by millions; keep every test contract's
+        // storage alive throughout.
+        env.ledger().with_mut(|l| {
+            l.min_persistent_entry_ttl = 50_000_000;
+            l.min_temp_entry_ttl = 50_000_000;
+            l.max_entry_ttl = 100_000_000;
+        });
 
         let admin = Address::generate(&env);
         let user = Address::generate(&env);
@@ -1340,5 +1389,321 @@ mod test {
         client.borrow(&user2, &2_000_000_000);
 
         assert_eq!(client.total_borrowed(), 5_000_000_000);
+    }
+
+    // ------------------------------------------------------------------
+    // Version 3: governance owns every parameter, accounting stays exact
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn reports_version_3() {
+        let (env, contract_id, ..) = setup_test();
+        assert_eq!(LendingContractClient::new(&env, &contract_id).version(), 3);
+    }
+
+    /// The four `update_*` setters used to accept the admin key even after
+    /// governance was configured, which left a way around every passed vote.
+    #[test]
+    fn legacy_setters_answer_to_governance_once_set() {
+        let (env, contract_id, _, _, _, _, admin) = setup_test();
+        let client = LendingContractClient::new(&env, &contract_id);
+
+        client.update_borrow_rate(&600);
+        assert_eq!(env.auths()[0].0, admin);
+
+        let gov = Address::generate(&env);
+        client.set_governance(&gov);
+
+        client.update_borrow_rate(&700);
+        assert_eq!(env.auths()[0].0, gov, "update_borrow_rate bypassed governance");
+        client.update_collateral_factor(&7100);
+        assert_eq!(env.auths()[0].0, gov, "update_collateral_factor bypassed governance");
+        client.update_liquidation_threshold(&8100);
+        assert_eq!(env.auths()[0].0, gov, "update_liquidation_threshold bypassed governance");
+        client.update_max_utilization(&8500);
+        assert_eq!(env.auths()[0].0, gov, "update_max_utilization bypassed governance");
+
+        assert_eq!(client.get_borrow_rate(), 700);
+        assert_eq!(client.get_collateral_factor(), 7100);
+        assert_eq!(client.get_liquidation_threshold(), 8100);
+        assert_eq!(client.get_max_utilization(), 8500);
+    }
+
+    #[test]
+    fn legacy_setters_enforce_the_same_bounds_as_governance() {
+        let (env, contract_id, ..) = setup_test();
+        let client = LendingContractClient::new(&env, &contract_id);
+        assert!(client.try_update_borrow_rate(&10_001).is_err());
+        assert!(client.try_update_collateral_factor(&0).is_err());
+        // The collateral factor may not pass the liquidation threshold (8000),
+        // or a position could be liquidatable the moment it is opened.
+        assert!(client.try_update_collateral_factor(&8_500).is_err());
+        assert!(client.try_update_liquidation_threshold(&6_000).is_err());
+    }
+
+    /// A new borrow rate applies from the moment it is set. Time already
+    /// elapsed is charged at the old rate.
+    #[test]
+    fn a_rate_change_is_not_applied_retroactively() {
+        let (env, contract_id, _, _, user, ..) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        client.update_borrow_rate(&400);
+        client.deposit_collateral(&user, &100_000_0000000);
+        client.borrow(&user, &1_000_0000000);
+
+        advance(&env, SPAN);
+        let (_, owed_at_change) = client.get_position(&user);
+        let index_at_change = client.get_borrow_index();
+
+        // Quadruple the rate. Nothing already owed may change.
+        client.update_borrow_rate(&1_600);
+        assert_eq!(client.get_borrow_index(), index_at_change);
+        let (_, owed_after_change) = client.get_position(&user);
+        assert_eq!(owed_after_change, owed_at_change);
+    }
+
+    #[test]
+    fn a_rate_change_without_reading_first_still_charges_the_old_rate() {
+        let (env, contract_id, _, _, user, ..) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        client.update_borrow_rate(&400);
+        client.deposit_collateral(&user, &100_000_0000000);
+        client.borrow(&user, &1_000_0000000);
+
+        // No read in between: the setter itself must accrue first.
+        advance(&env, SPAN);
+        client.update_borrow_rate(&1_600);
+        let (_, owed) = client.get_position(&user);
+
+        let expected_bps = 400 * (SPAN as i128) / YEAR_LEDGERS;
+        let growth_bps = (owed - 1_000_0000000) * 10_000 / 1_000_0000000;
+        assert!(
+            (growth_bps - expected_bps).abs() <= 1,
+            "charged {growth_bps} bps for a span that cost {expected_bps} at the old rate"
+        );
+    }
+
+    /// Before version 3, liquidation subtracted an interest-bearing debt from
+    /// the scaled total, removing more than the debt once the index passed 1.0.
+    #[test]
+    fn liquidation_leaves_the_total_equal_to_the_remaining_debts() {
+        let (env, contract_id, sxlm_id, _, alice, liquidator, _, vault_id) = setup_with_vault();
+        let client = LendingContractClient::new(&env, &contract_id);
+        let bob = Address::generate(&env);
+        StellarAssetClient::new(&env, &sxlm_id).mint(&bob, &100_000_0000000);
+        StellarAssetClient::new(&env, &sxlm_id).mint(&contract_id, &100_000_0000000);
+
+        client.update_borrow_rate(&2_000);
+        client.deposit_collateral(&alice, &10_000_0000000);
+        client.borrow(&alice, &6_900_0000000);
+        client.deposit_collateral(&bob, &10_000_0000000);
+        client.borrow(&bob, &1_000_0000000);
+
+        advance(&env, SPAN * 4);
+        assert!(client.get_borrow_index() > RATE_PRECISION, "test needs interest");
+
+        // Collateral loses value; alice becomes liquidatable, bob does not.
+        MockVaultClient::new(&env, &vault_id).set_rate(&(RATE_PRECISION * 8 / 10));
+        assert!(client.health_factor(&alice) < RATE_PRECISION);
+        assert!(client.health_factor(&bob) >= RATE_PRECISION);
+        client.liquidate(&liquidator, &alice);
+
+        let (_, bob_debt) = client.get_position(&bob);
+        let total = client.total_borrowed();
+        assert!(
+            (total - bob_debt).abs() <= 1,
+            "total {total} does not match the one remaining debt {bob_debt}"
+        );
+    }
+
+    #[test]
+    fn admin_rotation_needs_both_keys() {
+        let (env, contract_id, _, _, _, _, admin) = setup_test();
+        let client = LendingContractClient::new(&env, &contract_id);
+        let next = Address::generate(&env);
+        client.set_admin(&next);
+        let signers: std::vec::Vec<Address> = env.auths().iter().map(|a| a.0.clone()).collect();
+        assert!(signers.contains(&admin));
+        assert!(signers.contains(&next));
+        assert_eq!(client.admin(), next);
+    }
+
+    /// Instance storage as read from mainnet on 2026-11-23, orphaned keys
+    /// included. Every live setting must read correctly with no migration.
+    #[test]
+    fn reads_the_live_mainnet_storage_unchanged() {
+        #[derive(Clone)]
+        #[contracttype]
+        enum Orphan {
+            ExchangeRate,
+            Paused,
+            TotalAccruedInterest,
+        }
+
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().with_mut(|l| l.sequence_number = 64_213_270);
+        let admin = Address::generate(&env);
+        let native = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        let sxlm = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        let vault = env.register_contract(None, MockVault);
+        let id = env.register_contract(None, LendingContract);
+        env.as_contract(&id, || {
+            let st = env.storage().instance();
+            st.set(&DataKey::Admin, &admin);
+            st.set(&DataKey::BorrowIndex, &10_000_007i128);
+            st.set(&DataKey::BorrowRateBps, &500i128);
+            st.set(&DataKey::CollateralFactorBps, &7_500i128);
+            st.set(&DataKey::Initialized, &true);
+            st.set(&DataKey::InterestAccrued, &43i128);
+            st.set(&DataKey::LastAccrualLedger, &64_213_270u32);
+            st.set(&DataKey::LiquidationBonusBps, &500i128);
+            st.set(&DataKey::LiquidationThresholdBps, &8_000i128);
+            st.set(&DataKey::NativeToken, &native);
+            st.set(&DataKey::SxlmToken, &sxlm);
+            st.set(&DataKey::TotalBorrowed, &62_000_031i128);
+            st.set(&DataKey::TotalCollateral, &140_300_000i128);
+            st.set(&DataKey::Vault, &vault);
+            st.set(&Orphan::ExchangeRate, &10_000_000i128);
+            st.set(&Orphan::Paused, &false);
+            st.set(&Orphan::TotalAccruedInterest, &0i128);
+        });
+        let c = LendingContractClient::new(&env, &id);
+        assert_eq!(c.version(), 3);
+        assert_eq!(c.get_vault_share_bps(), DEFAULT_VAULT_SHARE_BPS);
+        assert_eq!(c.get_max_utilization(), DEFAULT_MAX_UTILIZATION_BPS);
+        assert_eq!(c.get_liquidation_fee_bps(), DEFAULT_LIQUIDATION_FEE_BPS);
+        assert_eq!(c.get_collateral_factor(), 7_500);
+        assert_eq!(c.get_liquidation_threshold(), 8_000);
+        assert_eq!(c.get_borrow_rate(), 500);
+        assert_eq!(c.total_borrowed(), 62_000_031 * 10_000_007 / RATE_PRECISION);
+        assert_eq!(c.total_accrued_interest(), 43);
+        assert_eq!(c.admin(), admin);
+    }
+
+    // ------------------------------------------------------------------
+    // Property tests
+    // ------------------------------------------------------------------
+
+    mod properties {
+        use super::*;
+        use proptest::prelude::*;
+        use std::vec::Vec as StdVec;
+
+        #[derive(Clone, Debug)]
+        enum Op {
+            Collateral { user: usize, amount: i128 },
+            Borrow { user: usize, pct: u8 },
+            Repay { user: usize, pct: u8 },
+            Withdraw { user: usize, pct: u8 },
+            Wait { ledgers: u32 },
+            Rate { bps: i128 },
+            Price { pct: u8 },
+            Liquidate { user: usize },
+            Settle,
+        }
+
+        const USERS: usize = 4;
+
+        fn op() -> impl Strategy<Value = Op> {
+            prop_oneof![
+                3 => (0..USERS, 1i128..1_000_0000000).prop_map(|(user, amount)| Op::Collateral { user, amount }),
+                3 => (0..USERS, 1u8..=100).prop_map(|(user, pct)| Op::Borrow { user, pct }),
+                2 => (0..USERS, 1u8..=100).prop_map(|(user, pct)| Op::Repay { user, pct }),
+                1 => (0..USERS, 1u8..=100).prop_map(|(user, pct)| Op::Withdraw { user, pct }),
+                2 => (1u32..500_000).prop_map(|ledgers| Op::Wait { ledgers }),
+                1 => (0i128..3_000).prop_map(|bps| Op::Rate { bps }),
+                1 => (50u8..=150).prop_map(|pct| Op::Price { pct }),
+                1 => (0..USERS).prop_map(|user| Op::Liquidate { user }),
+                1 => Just(Op::Settle),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+
+            /// Across any sequence of borrows, repayments, rate changes,
+            /// price moves and liquidations: the recorded total equals the
+            /// sum of individual debts, the index only rises, and no borrow
+            /// leaves a position below its collateral factor.
+            #[test]
+            fn debts_always_add_up(ops in proptest::collection::vec(op(), 1..40)) {
+                let (env, id, sxlm_id, native_id, _, liquidator, _, vault_id) = setup_with_vault();
+                env.budget().reset_unlimited();
+                let c = LendingContractClient::new(&env, &id);
+                let vault = MockVaultClient::new(&env, &vault_id);
+                let sxlm = StellarAssetClient::new(&env, &sxlm_id);
+                let xlm = StellarAssetClient::new(&env, &native_id);
+                sxlm.mint(&id, &1_000_000_0000000);
+                let users: StdVec<Address> = (0..USERS).map(|_| Address::generate(&env)).collect();
+                for u in users.iter() {
+                    sxlm.mint(u, &10_000_0000000);
+                    xlm.mint(u, &1_000_000_0000000);
+                }
+                let mut index = c.get_borrow_index();
+
+                for op in ops.iter() {
+                    match op.clone() {
+                        Op::Collateral { user, amount } => {
+                            let _ = c.try_deposit_collateral(&users[user], &amount);
+                        }
+                        Op::Borrow { user, pct } => {
+                            let u = &users[user];
+                            let (col, debt) = c.get_position(u);
+                            let room = col * c.get_exchange_rate() * c.get_collateral_factor()
+                                / (BPS_DENOMINATOR * RATE_PRECISION) - debt;
+                            let amount = room * pct as i128 / 100;
+                            if amount > 0 && c.try_borrow(u, &amount).is_ok() {
+                                let (col, debt) = c.get_position(u);
+                                let max = col * c.get_exchange_rate() * c.get_collateral_factor()
+                                    / (BPS_DENOMINATOR * RATE_PRECISION);
+                                prop_assert!(debt <= max, "borrow left debt {} above limit {}", debt, max);
+                            }
+                        }
+                        Op::Repay { user, pct } => {
+                            let (_, debt) = c.get_position(&users[user]);
+                            let amount = debt * pct as i128 / 100;
+                            if amount > 0 {
+                                let _ = c.try_repay(&users[user], &amount);
+                            }
+                        }
+                        Op::Withdraw { user, pct } => {
+                            let (col, _) = c.get_position(&users[user]);
+                            let amount = col * pct as i128 / 100;
+                            if amount > 0 {
+                                let _ = c.try_withdraw_collateral(&users[user], &amount);
+                            }
+                        }
+                        Op::Wait { ledgers } => {
+                            env.ledger().with_mut(|l| l.sequence_number += ledgers);
+                        }
+                        Op::Rate { bps } => {
+                            c.set_param(&symbol_short!("bor_rate"), &bps);
+                        }
+                        Op::Price { pct } => {
+                            vault.set_rate(&(RATE_PRECISION * pct as i128 / 100));
+                        }
+                        Op::Liquidate { user } => {
+                            let _ = c.try_liquidate(&liquidator, &users[user]);
+                        }
+                        Op::Settle => {
+                            let _ = c.try_settle_interest();
+                        }
+                    }
+
+                    let next = c.get_borrow_index();
+                    prop_assert!(next >= index, "borrow index fell");
+                    index = next;
+
+                    let sum: i128 = users.iter().map(|u| c.get_position(u).1).sum();
+                    let total = c.total_borrowed();
+                    prop_assert!(
+                        (total - sum).abs() <= USERS as i128,
+                        "total {} vs sum of debts {} after {:?}", total, sum, op
+                    );
+                    prop_assert!(c.total_accrued_interest() >= 0);
+                }
+            }
+        }
     }
 }

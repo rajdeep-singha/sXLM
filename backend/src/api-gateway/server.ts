@@ -22,6 +22,8 @@ export interface GatewayDeps {
   stakingEngine: StakingEngine;
   rewardEngine: RewardEngine;
   userService: UserService;
+  /** Operational status for /health: keeper, monitor, RPC endpoints. */
+  health?: () => Record<string, unknown>;
 }
 
 export async function startApiGateway(deps: GatewayDeps) {
@@ -40,10 +42,13 @@ export async function startApiGateway(deps: GatewayDeps) {
   // Decorate request with wallet field for auth
   fastify.decorateRequest("wallet", "");
 
-  // Health check
+  // Health check. `status` stays "ok" while the API serves requests, so the
+  // platform health probe is unaffected; the rest is public operational
+  // evidence (keeper liveness, active alerts, endpoint health), never secrets.
   fastify.get("/health", async () => ({
     status: "ok",
     timestamp: new Date().toISOString(),
+    ...(deps.health ? deps.health() : {}),
   }));
 
   // Auth routes (public)

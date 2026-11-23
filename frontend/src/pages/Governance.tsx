@@ -147,10 +147,17 @@ export default function Governance() {
                   and then revert when it reached the contract. */}
               <option value="fee_bps">Protocol fee (bps) — vault</option>
               <option value="cooldown">Withdrawal cooldown (ledgers) — vault</option>
+              <option value="wd_fee">Withdrawal fee (bps) — vault</option>
+              <option value="flash_fee">Flash loan fee (bps) — vault</option>
               <option value="coll_fact">Collateral factor (bps) — lending</option>
               <option value="liq_thres">Liquidation threshold (bps) — lending</option>
               <option value="bor_rate">Borrow rate (bps) — lending</option>
               <option value="max_util">Reserve utilisation cap (bps) — lending</option>
+              <option value="liq_fee">Liquidation surcharge (bps) — lending</option>
+              <option value="lend_share">Lending interest to holders (bps) — lending</option>
+              <option value="swap_fee">Swap fee (bps) — LP pool</option>
+              <option value="proto_fee">Protocol fee (bps) — LP pool</option>
+              <option value="lp_share">Protocol fees to holders (bps) — LP pool</option>
             </select>
           </div>
           <div>

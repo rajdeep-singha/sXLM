@@ -227,9 +227,9 @@ function DocContent() {
         </P>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-4">
           {[
-            { name: 'Risk Engine', desc: 'Continuously evaluates collateralization, liquidity depth, strategy exposure, oracle status, and withdrawal pressure.' },
-            { name: 'Solvency Watch', desc: 'Compares what the vault holds against share claims, queued withdrawals and accrued fees, and pauses the protocol on a shortfall.' },
-            { name: 'Keeper Service', desc: 'Executes keeper tasks with limited permissions — cannot arbitrarily move user funds.' },
+            { name: 'Metrics', desc: 'Snapshots the exchange rate, total staked and sXLM supply for the charts in the app. APY is derived from realised rate history, not projected.' },
+            { name: 'Solvency Watch', desc: 'Every five minutes, compares what the vault holds against share claims, queued withdrawals and accrued fees, and alerts the admin signers on a shortfall. It cannot pause the protocol itself.' },
+            { name: 'Keeper Service', desc: 'Bumps contract TTLs, settles lending interest to the vault and collects LP fees. Signs with its own key and calls permissionless functions only: it holds no admin rights and cannot move user funds.' },
             { name: 'Event Bus', desc: 'Processes on-chain events from Stellar Horizon for real-time analytics and state indexing.' },
           ].map((s) => (
             <div key={s.name} className="bg-[#F5F5F5] rounded-xl p-4 border border-[#e5e5e5]">
