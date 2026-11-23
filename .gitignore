@@ -2,3 +2,8 @@
 .env*
 contracts/target/
 target/
+# Contract test snapshots regenerated on every run and too large to track:
+# property tests write one per generated case (~100 MB), and the queue-scale
+# test records 400 withdrawals (16 MB).
+contracts/*/test_snapshots/test/properties/
+contracts/vault/test_snapshots/test/claims_stay_cheap_as_requests_accumulate.1.json

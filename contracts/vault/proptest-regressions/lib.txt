@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 905d85849060a994a6fc219add29e0773dc7199c19c1929d8014e7144b28ca22 # shrinks to ops = [Wait { ledgers: 4096 }]
+cc ddea711272aac6632aeef7e32b6f42dc45fdb45e42153bcff190d34f8957cb97 # shrinks to warmup = [], amount = 10000
+cc 540360a043a4982170b7adcf016a19029033d9f4fd43d94c8b441c1b67758002 # shrinks to ops = [Wait { ledgers: 4096 }]
+cc de9e6d4de2536cd873ea19ee6fc4beca5c7de5829fd943cf6a01df263edb0240 # shrinks to ops = [Deposit { user: 0, amount: 2000 }]

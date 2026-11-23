@@ -3,6 +3,9 @@
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol};
 
 const BPS_DENOMINATOR: i128 = 10_000;
+
+/// Storage layout version, reported by `version()`.
+const CONTRACT_VERSION: u32 = 3;
 const MIN_PROPOSAL_BALANCE: i128 = 100_0000000; // 100 sXLM minimum to create proposal
 
 // ---------- TTL constants ----------
@@ -205,6 +208,28 @@ impl GovernanceContract {
     /// Bump instance TTL — can be called by anyone to keep contract alive.
     pub fn bump_instance(env: Env) {
         extend_instance(&env);
+    }
+
+    /// Transfer the admin role. Both the current and the new admin must sign.
+    ///
+    /// The admin here can only upgrade this contract; proposals, votes and
+    /// execution never consult it.
+    pub fn set_admin(env: Env, new_admin: Address) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+        new_admin.require_auth();
+        extend_instance(&env);
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish((soroban_sdk::symbol_short!("admin"),), (admin, new_admin));
+    }
+
+    pub fn admin(env: Env) -> Address {
+        extend_instance(&env);
+        read_admin(&env)
+    }
+
+    pub fn version(_env: Env) -> u32 {
+        CONTRACT_VERSION
     }
 
     /// Create a new governance proposal. Proposer must hold minimum sXLM balance.
@@ -479,6 +504,7 @@ pub trait ParamTargetInterface {
 
 #[cfg(test)]
 mod test {
+    extern crate std;
     use super::*;
     use soroban_sdk::testutils::{Address as _, Ledger};
     use soroban_sdk::{symbol_short, Env, Map};
@@ -764,5 +790,31 @@ mod test {
         advance(&env, 50);
         f.gov.execute_proposal(&id);
         assert_eq!(f.target.fee(), 750);
+    }
+
+    #[test]
+    fn reports_version_3() {
+        let env = Env::default();
+        let f = setup(&env);
+        assert_eq!(f.gov.version(), 3);
+    }
+
+    #[test]
+    fn admin_rotation_needs_both_keys() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let sxlm_id = env.register_contract(None, MockSxlm);
+        let gov_id = env.register_contract(None, GovernanceContract);
+        let gov = GovernanceContractClient::new(&env, &gov_id);
+        gov.initialize(&admin, &sxlm_id, &100, &1000, &50);
+        assert_eq!(gov.admin(), admin);
+
+        let next = Address::generate(&env);
+        gov.set_admin(&next);
+        let signers: std::vec::Vec<Address> = env.auths().iter().map(|a| a.0.clone()).collect();
+        assert!(signers.contains(&admin));
+        assert!(signers.contains(&next));
+        assert_eq!(gov.admin(), next);
     }
 }

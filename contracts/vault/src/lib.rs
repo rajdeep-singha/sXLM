@@ -1,8 +1,17 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, Address, BytesN, Env, Map, Symbol,
+    contract, contractimpl, contracttype, token, Address, BytesN, Env, Map, Symbol, Vec,
 };
+
+/// Storage layout version. Reported by `version()` so an upgrade can be checked
+/// from outside without reading code.
+const CONTRACT_VERSION: u32 = 3;
+
+/// Most withdrawal requests one account may have open at once. Each is its own
+/// storage entry; the cap keeps the per-account index small enough to load in
+/// one call however many requests the vault handles overall.
+const MAX_OPEN_WITHDRAWALS_PER_USER: u32 = 50;
 
 /// Precision multiplier for exchange rate calculations (7 decimals).
 ///
@@ -67,6 +76,11 @@ pub enum DataKey {
     FlashFeeBps,
     /// Set while a flash loan is outstanding, to block reentry.
     FlashLoanActive,
+    /// One open withdrawal request, stored on its own so the cost of any call
+    /// is independent of how many requests exist. Removed when claimed.
+    Withdrawal(u64),
+    /// Ids of an account's open withdrawal requests.
+    UserWithdrawals(Address),
 }
 
 #[derive(Clone)]
@@ -187,24 +201,124 @@ fn next_withdrawal_id(env: &Env) -> u64 {
     id
 }
 
-fn get_withdrawal_queue(env: &Env) -> Map<u64, WithdrawalRequest> {
-    let queue: Map<u64, WithdrawalRequest> = env
-        .storage()
-        .persistent()
-        .get(&DataKey::WithdrawalQueue)
-        .unwrap_or(Map::new(env));
-    // Extend TTL whenever we read the queue
-    if env.storage().persistent().has(&DataKey::WithdrawalQueue) {
+// --- Withdrawal storage ---
+//
+// Version 3 keeps each open request in its own persistent entry and an index
+// of open ids per account. Earlier versions kept every request ever made in
+// one map under `WithdrawalQueue`; that entry only grew, and every call loaded
+// all of it, so withdrawals would stop working once it passed the entry size
+// limit. The legacy map is read as a fallback and drained by
+// `migrate_withdrawals`; nothing writes to it any more.
+
+fn legacy_queue(env: &Env) -> Option<Map<u64, WithdrawalRequest>> {
+    let queue: Option<Map<u64, WithdrawalRequest>> =
+        env.storage().persistent().get(&DataKey::WithdrawalQueue);
+    if queue.is_some() {
         extend_queue(env);
     }
     queue
 }
 
-fn set_withdrawal_queue(env: &Env, queue: &Map<u64, WithdrawalRequest>) {
+fn set_legacy_queue(env: &Env, queue: &Map<u64, WithdrawalRequest>) {
+    if queue.is_empty() {
+        env.storage().persistent().remove(&DataKey::WithdrawalQueue);
+    } else {
+        env.storage().persistent().set(&DataKey::WithdrawalQueue, queue);
+        extend_queue(env);
+    }
+}
+
+fn read_withdrawal_entry(env: &Env, id: u64) -> Option<WithdrawalRequest> {
+    let key = DataKey::Withdrawal(id);
+    let request: Option<WithdrawalRequest> = env.storage().persistent().get(&key);
+    if request.is_some() {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    }
+    request
+}
+
+fn write_withdrawal_entry(env: &Env, request: &WithdrawalRequest) {
+    let key = DataKey::Withdrawal(request.id);
+    env.storage().persistent().set(&key, request);
     env.storage()
         .persistent()
-        .set(&DataKey::WithdrawalQueue, queue);
-    extend_queue(env);
+        .extend_ttl(&key, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+}
+
+fn read_user_index(env: &Env, user: &Address) -> Vec<u64> {
+    let key = DataKey::UserWithdrawals(user.clone());
+    let ids: Option<Vec<u64>> = env.storage().persistent().get(&key);
+    match ids {
+        Some(ids) => {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+            ids
+        }
+        None => Vec::new(env),
+    }
+}
+
+fn write_user_index(env: &Env, user: &Address, ids: &Vec<u64>) {
+    let key = DataKey::UserWithdrawals(user.clone());
+    if ids.is_empty() {
+        env.storage().persistent().remove(&key);
+    } else {
+        env.storage().persistent().set(&key, ids);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, PERSISTENT_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    }
+}
+
+fn index_add(env: &Env, user: &Address, id: u64) {
+    let mut ids = read_user_index(env, user);
+    if ids.len() >= MAX_OPEN_WITHDRAWALS_PER_USER {
+        panic!("too many open withdrawals; claim one first");
+    }
+    ids.push_back(id);
+    write_user_index(env, user, &ids);
+}
+
+fn index_remove(env: &Env, user: &Address, id: u64) {
+    let ids = read_user_index(env, user);
+    let mut kept = Vec::new(env);
+    for existing in ids.iter() {
+        if existing != id {
+            kept.push_back(existing);
+        }
+    }
+    write_user_index(env, user, &kept);
+}
+
+/// Store a new open request.
+fn open_withdrawal(env: &Env, request: &WithdrawalRequest) {
+    write_withdrawal_entry(env, request);
+    index_add(env, &request.user, request.id);
+}
+
+/// Find a request in current storage, then in the legacy map.
+fn find_withdrawal(env: &Env, id: u64) -> Option<WithdrawalRequest> {
+    if let Some(request) = read_withdrawal_entry(env, id) {
+        return Some(request);
+    }
+    legacy_queue(env).and_then(|queue| queue.get(id))
+}
+
+/// Remove a request that is being paid out, wherever it is stored.
+fn close_withdrawal(env: &Env, request: &WithdrawalRequest) {
+    let key = DataKey::Withdrawal(request.id);
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().remove(&key);
+        index_remove(env, &request.user, request.id);
+        return;
+    }
+    if let Some(mut queue) = legacy_queue(env) {
+        queue.remove(request.id);
+        set_legacy_queue(env, &queue);
+    }
 }
 
 // ==========================================================
@@ -305,11 +419,12 @@ impl VaultContract {
         }
         extend_instance(&env);
 
-        let queue = get_withdrawal_queue(&env);
         let mut pending: i128 = 0;
-        for (_, request) in queue.iter() {
-            if !request.claimed {
-                pending += request.xlm_amount;
+        if let Some(queue) = legacy_queue(&env) {
+            for (_, request) in queue.iter() {
+                if !request.claimed {
+                    pending += request.xlm_amount;
+                }
             }
         }
 
@@ -321,6 +436,48 @@ impl VaultContract {
             (soroban_sdk::symbol_short!("migrated"),),
             (pending, idle_balance(&env), total_shares(&env)),
         );
+    }
+
+    /// Move requests from the legacy single-map queue into per-request storage.
+    ///
+    /// Moves up to `limit` entries per call and returns how many remain, so a
+    /// large legacy map can be drained across several transactions. Unclaimed
+    /// requests keep their id, amount and unlock ledger; claimed ones are
+    /// dropped. Callable by anyone: it changes where a request is stored, never
+    /// what it is worth or who can claim it.
+    pub fn migrate_withdrawals(env: Env, limit: u32) -> u32 {
+        extend_instance(&env);
+        let mut queue = match legacy_queue(&env) {
+            Some(q) => q,
+            None => return 0,
+        };
+
+        let mut moved: u32 = 0;
+        let mut ids = Vec::new(&env);
+        for (id, _) in queue.iter() {
+            if moved >= limit {
+                break;
+            }
+            ids.push_back(id);
+            moved += 1;
+        }
+
+        for id in ids.iter() {
+            let request = queue.get(id).unwrap();
+            if !request.claimed {
+                open_withdrawal(&env, &request);
+            }
+            queue.remove(id);
+        }
+
+        let remaining = queue.len();
+        set_legacy_queue(&env, &queue);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("wd_migr"),),
+            (moved, remaining),
+        );
+        remaining
     }
 
     /// Bump instance TTL — can be called by anyone to keep the contract alive.
@@ -446,10 +603,7 @@ impl VaultContract {
                 unlock_ledger,
                 claimed: false,
             };
-
-            let mut queue = get_withdrawal_queue(&env);
-            queue.set(id, request);
-            set_withdrawal_queue(&env, &queue);
+            open_withdrawal(&env, &request);
 
             env.events().publish(
                 (soroban_sdk::symbol_short!("delayed"),),
@@ -464,8 +618,7 @@ impl VaultContract {
         user.require_auth();
         extend_instance(&env);
 
-        let mut queue = get_withdrawal_queue(&env);
-        let mut request = queue.get(withdrawal_id).expect("withdrawal not found");
+        let request = find_withdrawal(&env, withdrawal_id).expect("withdrawal not found");
 
         if request.user != user {
             panic!("not your withdrawal");
@@ -477,9 +630,9 @@ impl VaultContract {
             panic!("cooldown not expired");
         }
 
-        request.claimed = true;
-        queue.set(withdrawal_id, request.clone());
-        set_withdrawal_queue(&env, &queue);
+        // The request is removed rather than flagged, so storage tracks open
+        // requests only and a second claim finds nothing to pay.
+        close_withdrawal(&env, &request);
 
         // Retire the liability as the XLM leaves, so the two move together.
         let pending = read_i128(&env, &DataKey::PendingWithdrawals);
@@ -529,8 +682,9 @@ impl VaultContract {
         );
     }
 
-    /// Withdraw protocol fees to the admin address.
-    /// If amount > 0, withdraw that specific amount; if 0, withdraw all.
+    /// Withdraw protocol fees to the treasury address (the admin unless
+    /// `set_treasury` named another). If amount > 0, withdraw that specific
+    /// amount; if 0, withdraw all.
     pub fn withdraw_fees(env: Env, amount: i128) {
         let admin = read_admin(&env);
         admin.require_auth();
@@ -556,23 +710,41 @@ impl VaultContract {
             panic!("insufficient unencumbered balance");
         }
 
+        let treasury: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Treasury)
+            .unwrap_or(admin);
+
+        // Book the withdrawal before the transfer, so the liability and the
+        // XLM leave together.
+        write_i128(&env, &DataKey::TreasuryBalance, treasury_bal - withdraw_amount);
+
         let native_token_addr = read_native_token(&env);
         let xlm_client = token::Client::new(&env, &native_token_addr);
-        xlm_client.transfer(&env.current_contract_address(), &admin, &withdraw_amount);
-
-        write_i128(&env, &DataKey::TreasuryBalance, treasury_bal - withdraw_amount);
+        xlm_client.transfer(&env.current_contract_address(), &treasury, &withdraw_amount);
 
         env.events().publish(
             (soroban_sdk::symbol_short!("fee_out"),),
-            (admin, withdraw_amount),
+            (treasury, withdraw_amount),
         );
     }
 
+    /// Where `withdraw_fees` pays protocol revenue.
     pub fn set_treasury(env: Env, treasury: Address) {
         let admin = read_admin(&env);
         admin.require_auth();
         extend_instance(&env);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
+        env.events().publish((soroban_sdk::symbol_short!("treasury"),), treasury);
+    }
+
+    pub fn treasury(env: Env) -> Address {
+        extend_instance(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::Treasury)
+            .unwrap_or(read_admin(&env))
     }
 
     // ==========================================================
@@ -648,11 +820,15 @@ impl VaultContract {
         );
     }
 
+    /// Transfer the admin role. Both the current and the new admin must sign,
+    /// so a typo cannot hand the contract to an address nobody controls.
     pub fn set_admin(env: Env, new_admin: Address) {
         let admin = read_admin(&env);
         admin.require_auth();
+        new_admin.require_auth();
         extend_instance(&env);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish((soroban_sdk::symbol_short!("admin"),), (admin, new_admin));
     }
 
     /// Hand parameter control to the governance contract, once.
@@ -699,9 +875,10 @@ impl VaultContract {
         env.events().publish((soroban_sdk::symbol_short!("param"),), (key, value));
     }
 
+    /// Same power as `set_param("cooldown", ..)`: governance once configured,
+    /// the admin until then. Kept for existing callers.
     pub fn set_cooldown_period(env: Env, new_cooldown: u32) {
-        let admin = read_admin(&env);
-        admin.require_auth();
+        require_param_authority(&env);
         extend_instance(&env);
         env.storage().instance().set(&DataKey::CooldownPeriod, &new_cooldown);
         env.events().publish((soroban_sdk::symbol_short!("cd_upd"),), new_cooldown);
@@ -825,10 +1002,44 @@ impl VaultContract {
         read_cooldown(&env)
     }
 
+    /// An open withdrawal request. Claimed requests are removed, so this
+    /// panics with "withdrawal not found" once a request has been paid.
     pub fn get_withdrawal(env: Env, withdrawal_id: u64) -> WithdrawalRequest {
         extend_instance(&env);
-        let queue = get_withdrawal_queue(&env);
-        queue.get(withdrawal_id).expect("withdrawal not found")
+        find_withdrawal(&env, withdrawal_id).expect("withdrawal not found")
+    }
+
+    /// Every open withdrawal request for an account, oldest first.
+    /// Requests still in the legacy map appear once `migrate_withdrawals` has
+    /// moved them.
+    pub fn get_user_withdrawals(env: Env, user: Address) -> Vec<WithdrawalRequest> {
+        extend_instance(&env);
+        let mut out = Vec::new(&env);
+        for id in read_user_index(&env, &user).iter() {
+            if let Some(request) = read_withdrawal_entry(&env, id) {
+                out.push_back(request);
+            }
+        }
+        out
+    }
+
+    /// Withdrawal ids issued so far. Ids run from 0 to this value minus one.
+    pub fn withdrawal_count(env: Env) -> u64 {
+        extend_instance(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::WithdrawalCounter)
+            .unwrap_or(0)
+    }
+
+    /// Entries still in the legacy single-map queue. Zero once migrated.
+    pub fn legacy_queue_len(env: Env) -> u32 {
+        extend_instance(&env);
+        legacy_queue(&env).map(|q| q.len()).unwrap_or(0)
+    }
+
+    pub fn version(_env: Env) -> u32 {
+        CONTRACT_VERSION
     }
 
     pub fn admin(env: Env) -> Address {
@@ -857,7 +1068,9 @@ pub trait SxlmTokenInterface {
 #[cfg(test)]
 mod test {
     use super::*;
+    extern crate std;
     use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::Ledger;
     use soroban_sdk::{symbol_short, Env};
 
     // ------------------------------------------------------------------
@@ -1203,7 +1416,7 @@ mod test {
                 id: 3, user: alice.clone(), xlm_amount: 10_000_000,
                 unlock_ledger: 1, claimed: true,
             });
-            set_withdrawal_queue(&env, &queue);
+            set_legacy_queue(&env, &queue);
             env.storage().instance().remove(&DataKey::MigratedV2);
             write_i128(&env, &DataKey::PendingWithdrawals, 0);
         });
@@ -1539,6 +1752,573 @@ mod test {
         assert_eq!(f.vault.is_paused(), true);
         f.vault.unpause();
         assert_eq!(f.vault.is_paused(), false);
+    }
+
+    // ------------------------------------------------------------------
+    // Version 3: withdrawal storage, authority, treasury
+    // ------------------------------------------------------------------
+
+    /// Move idle XLM out as if a strategy held it, keeping it on the books.
+    /// Total assets are unchanged, but the free balance shrinks, which is
+    /// what pushes withdrawals into the queue.
+    fn deploy_out(f: &Fixture, amount: i128) {
+        let sink = Address::generate(&f.env);
+        f.env.as_contract(&f.vault_id, || {
+            f.xlm.transfer(&f.vault_id, &sink, &amount);
+            let deployed = read_i128(&f.env, &DataKey::DeployedToStrategies);
+            write_i128(&f.env, &DataKey::DeployedToStrategies, deployed + amount);
+        });
+    }
+
+    /// Bring deployed XLM back, as if a strategy returned it.
+    fn return_in(f: &Fixture, amount: i128) {
+        f.xlm_admin.mint(&f.vault_id, &amount);
+        f.env.as_contract(&f.vault_id, || {
+            let deployed = read_i128(&f.env, &DataKey::DeployedToStrategies);
+            write_i128(&f.env, &DataKey::DeployedToStrategies, deployed - amount);
+        });
+    }
+
+    /// A user with a queued (not instant) withdrawal.
+    fn queued_user(f: &Fixture, deposit: i128) -> (Address, u64) {
+        let user = funded_user(f, deposit);
+        f.vault.deposit(&user, &deposit);
+        let free = f.vault.liquidity_buffer();
+        if free > 0 {
+            deploy_out(f, free);
+        }
+        let before = f.vault.withdrawal_count();
+        f.vault.request_withdrawal(&user, &f.sxlm.balance(&user));
+        assert_eq!(f.vault.withdrawal_count(), before + 1, "withdrawal was not queued");
+        (user, before)
+    }
+
+    #[test]
+    fn reports_version_3() {
+        let env = Env::default();
+        let f = setup(&env);
+        assert_eq!(f.vault.version(), 3);
+    }
+
+    #[test]
+    fn a_claim_removes_the_request() {
+        let env = Env::default();
+        let f = setup(&env);
+        let (alice, id) = queued_user(&f, 100_0000000);
+
+        let owed = f.vault.get_withdrawal(&id).xlm_amount;
+        assert_eq!(f.vault.get_user_withdrawals(&alice).len(), 1);
+        assert_eq!(f.vault.pending_withdrawals(), owed);
+
+        return_in(&f, owed);
+        env.ledger().with_mut(|l| l.sequence_number += 17_280);
+        f.vault.claim_withdrawal(&alice, &id);
+
+        assert_eq!(f.xlm.balance(&alice), owed);
+        assert_eq!(f.vault.pending_withdrawals(), 0);
+        assert_eq!(f.vault.get_user_withdrawals(&alice).len(), 0);
+        assert!(f.vault.try_get_withdrawal(&id).is_err(), "claimed request still stored");
+        assert!(
+            f.vault.try_claim_withdrawal(&alice, &id).is_err(),
+            "a request was paid twice"
+        );
+    }
+
+    #[test]
+    fn nobody_else_can_claim_a_request() {
+        let env = Env::default();
+        let f = setup(&env);
+        let (_alice, id) = queued_user(&f, 100_0000000);
+        let mallory = Address::generate(&env);
+        env.ledger().with_mut(|l| l.sequence_number += 17_280);
+        assert!(f.vault.try_claim_withdrawal(&mallory, &id).is_err());
+    }
+
+    #[test]
+    fn a_claim_before_cooldown_is_refused() {
+        let env = Env::default();
+        let f = setup(&env);
+        let (alice, id) = queued_user(&f, 100_0000000);
+        assert!(f.vault.try_claim_withdrawal(&alice, &id).is_err());
+    }
+
+    #[test]
+    fn each_user_sees_only_their_own_requests_in_order() {
+        let env = Env::default();
+        let f = setup(&env);
+        let (alice, a0) = queued_user(&f, 10_0000000);
+        let (bob, b0) = queued_user(&f, 20_0000000);
+        f.xlm_admin.mint(&alice, &5_0000000);
+        f.vault.deposit(&alice, &5_0000000);
+        deploy_out(&f, f.vault.liquidity_buffer());
+        let a1 = f.vault.withdrawal_count();
+        f.vault.request_withdrawal(&alice, &f.sxlm.balance(&alice));
+
+        let mine = f.vault.get_user_withdrawals(&alice);
+        assert_eq!(mine.len(), 2);
+        assert_eq!(mine.get(0).unwrap().id, a0);
+        assert_eq!(mine.get(1).unwrap().id, a1);
+        let theirs = f.vault.get_user_withdrawals(&bob);
+        assert_eq!(theirs.len(), 1);
+        assert_eq!(theirs.get(0).unwrap().id, b0);
+    }
+
+    #[test]
+    fn open_requests_per_user_are_capped() {
+        let env = Env::default();
+        let f = setup(&env);
+        let alice = funded_user(&f, 1_000_0000000);
+        f.vault.deposit(&alice, &1_000_0000000);
+        deploy_out(&f, f.vault.liquidity_buffer());
+        for _ in 0..MAX_OPEN_WITHDRAWALS_PER_USER {
+            f.vault.request_withdrawal(&alice, &1_0000000);
+        }
+        assert!(f.vault.try_request_withdrawal(&alice, &1_0000000).is_err());
+    }
+
+    /// The legacy queue held every request in one entry and failed somewhere
+    /// past 300 lifetime requests. Per-request storage keeps a claim's cost
+    /// flat: request number 400 claims within the default per-call budget.
+    #[test]
+    fn claims_stay_cheap_as_requests_accumulate() {
+        let env = Env::default();
+        let f = setup(&env);
+        env.budget().reset_unlimited();
+
+        let mut last = None;
+        for _ in 0..400 {
+            last = Some(queued_user(&f, 1_0000000));
+        }
+        let (user, id) = last.unwrap();
+        assert_eq!(f.vault.withdrawal_count(), 400);
+
+        let owed = f.vault.get_withdrawal(&id).xlm_amount;
+        return_in(&f, owed);
+        env.ledger().with_mut(|l| l.sequence_number += 17_280);
+
+        env.budget().reset_default();
+        f.vault.claim_withdrawal(&user, &id);
+        let used = env.budget().cpu_instruction_cost();
+        assert!(used < 10_000_000, "claim cost {} grew with queue size", used);
+    }
+
+    /// The live vault: five legacy requests, ids 0-4, three unclaimed and
+    /// owing 38,114,885 stroops between them.
+    fn seed_legacy_queue(f: &Fixture, owner: &Address) {
+        let env = &f.env;
+        env.as_contract(&f.vault_id, || {
+            let mut queue: Map<u64, WithdrawalRequest> = Map::new(env);
+            let amounts = [9_848_024i128, 9_997_655, 18_269_206, 10_000_000, 5_000_000];
+            for (i, amount) in amounts.iter().enumerate() {
+                queue.set(i as u64, WithdrawalRequest {
+                    id: i as u64,
+                    user: owner.clone(),
+                    xlm_amount: *amount,
+                    unlock_ledger: 1,
+                    claimed: i >= 3,
+                });
+            }
+            set_legacy_queue(env, &queue);
+            env.storage().instance().set(&DataKey::WithdrawalCounter, &5u64);
+            write_i128(env, &DataKey::PendingWithdrawals, 38_114_885);
+        });
+        f.xlm_admin.mint(&f.vault_id, &38_114_885);
+    }
+
+    #[test]
+    fn legacy_requests_can_be_read_and_claimed_before_migration() {
+        let env = Env::default();
+        let f = setup(&env);
+        let owner = Address::generate(&env);
+        seed_legacy_queue(&f, &owner);
+        env.ledger().with_mut(|l| l.sequence_number += 10);
+
+        assert_eq!(f.vault.legacy_queue_len(), 5);
+        assert_eq!(f.vault.get_withdrawal(&0).xlm_amount, 9_848_024);
+        assert!(f.vault.get_withdrawal(&3).claimed);
+
+        f.vault.claim_withdrawal(&owner, &0);
+        assert_eq!(f.xlm.balance(&owner), 9_848_024);
+        assert_eq!(f.vault.legacy_queue_len(), 4);
+        assert_eq!(f.vault.pending_withdrawals(), 38_114_885 - 9_848_024);
+        assert!(f.vault.try_claim_withdrawal(&owner, &0).is_err());
+        assert!(f.vault.try_claim_withdrawal(&owner, &3).is_err(), "settled legacy request paid again");
+    }
+
+    #[test]
+    fn migration_moves_open_requests_and_drops_settled_ones() {
+        let env = Env::default();
+        let f = setup(&env);
+        let owner = Address::generate(&env);
+        seed_legacy_queue(&f, &owner);
+        let pending = f.vault.pending_withdrawals();
+
+        assert_eq!(f.vault.migrate_withdrawals(&2), 3);
+        assert_eq!(f.vault.migrate_withdrawals(&2), 1);
+        assert_eq!(f.vault.migrate_withdrawals(&2), 0);
+        assert_eq!(f.vault.migrate_withdrawals(&2), 0, "a second run must be a no-op");
+        assert_eq!(f.vault.legacy_queue_len(), 0);
+
+        let open = f.vault.get_user_withdrawals(&owner);
+        assert_eq!(open.len(), 3);
+        let total: i128 = open.iter().map(|r| r.xlm_amount).sum();
+        assert_eq!(total, 38_114_885);
+        assert_eq!(f.vault.pending_withdrawals(), pending, "migration moved value");
+        assert!(f.vault.try_get_withdrawal(&3).is_err());
+
+        env.ledger().with_mut(|l| l.sequence_number += 10);
+        for r in open.iter() {
+            f.vault.claim_withdrawal(&owner, &r.id);
+        }
+        assert_eq!(f.xlm.balance(&owner), 38_114_885);
+        assert_eq!(f.vault.pending_withdrawals(), 0);
+
+        // New requests continue the id sequence instead of reusing 0-4.
+        let (_u, id) = queued_user(&f, 10_0000000);
+        assert_eq!(id, 5);
+    }
+
+    #[test]
+    fn the_cooldown_setter_answers_to_governance_once_set() {
+        let env = Env::default();
+        let f = setup(&env);
+
+        f.vault.set_cooldown_period(&100);
+        assert_eq!(env.auths()[0].0, f.admin, "before governance the admin sets it");
+
+        let gov = Address::generate(&env);
+        f.vault.set_governance(&gov);
+        f.vault.set_cooldown_period(&200);
+        assert_eq!(env.auths()[0].0, gov, "the admin key bypassed governance");
+        assert_eq!(f.vault.get_cooldown_period(), 200);
+    }
+
+    #[test]
+    fn fees_are_paid_to_the_treasury() {
+        let env = Env::default();
+        let f = setup(&env);
+        let user = funded_user(&f, 100_0000000);
+        f.vault.deposit(&user, &100_0000000);
+        let funder = funded_user(&f, 10_0000000);
+        f.vault.add_rewards(&funder, &10_0000000);
+
+        let treasury = Address::generate(&env);
+        f.vault.set_treasury(&treasury);
+        assert_eq!(f.vault.treasury(), treasury);
+
+        let fees = f.vault.treasury_balance();
+        assert!(fees > 0);
+        f.vault.withdraw_fees(&0);
+        assert_eq!(f.xlm.balance(&treasury), fees);
+        assert_eq!(f.xlm.balance(&f.admin), 0);
+    }
+
+    #[test]
+    fn admin_rotation_needs_both_keys() {
+        let env = Env::default();
+        let f = setup(&env);
+        let next = Address::generate(&env);
+        f.vault.set_admin(&next);
+        let signers: std::vec::Vec<Address> = env.auths().iter().map(|a| a.0.clone()).collect();
+        assert!(signers.contains(&f.admin));
+        assert!(signers.contains(&next));
+        assert_eq!(f.vault.admin(), next);
+    }
+
+    /// Instance storage exactly as read from mainnet on 2026-11-23, including
+    /// keys earlier versions left behind. Version 3 must read every live
+    /// setting correctly from it with no migration call.
+    #[test]
+    fn reads_the_live_mainnet_storage_unchanged() {
+        #[derive(Clone)]
+        #[contracttype]
+        enum Orphan {
+            LiquidityBuffer,
+            TotalSxlmSupply,
+            TotalXlmStaked,
+        }
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let native = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        let sxlm = env.register_contract(None, MockSxlm);
+        let vault_id = env.register_contract(None, VaultContract);
+        env.as_contract(&vault_id, || {
+            let st = env.storage().instance();
+            st.set(&DataKey::Admin, &admin);
+            st.set(&DataKey::CooldownPeriod, &181_440u32);
+            st.set(&DataKey::DeployedToStrategies, &0i128);
+            st.set(&DataKey::Initialized, &true);
+            st.set(&DataKey::MigratedV2, &true);
+            st.set(&DataKey::NativeToken, &native);
+            st.set(&DataKey::Paused, &false);
+            st.set(&DataKey::PendingWithdrawals, &38_114_885i128);
+            st.set(&DataKey::SxlmToken, &sxlm);
+            st.set(&DataKey::Treasury, &admin);
+            st.set(&DataKey::TreasuryBalance, &0i128);
+            st.set(&DataKey::WithdrawalCounter, &5u64);
+            st.set(&Orphan::LiquidityBuffer, &0i128);
+            st.set(&Orphan::TotalSxlmSupply, &329_453_105i128);
+            st.set(&Orphan::TotalXlmStaked, &687_565_055i128);
+        });
+        let v = VaultContractClient::new(&env, &vault_id);
+        assert_eq!(v.version(), 3);
+        assert_eq!(v.protocol_fee_bps(), DEFAULT_PROTOCOL_FEE_BPS);
+        assert_eq!(v.withdrawal_fee_bps(), DEFAULT_WITHDRAWAL_FEE_BPS);
+        assert_eq!(v.flash_fee_bps(), DEFAULT_FLASH_FEE_BPS);
+        assert_eq!(v.get_cooldown_period(), 181_440);
+        assert_eq!(v.pending_withdrawals(), 38_114_885);
+        assert_eq!(v.withdrawal_count(), 5);
+        assert_eq!(v.legacy_queue_len(), 0);
+        assert_eq!(v.treasury(), admin);
+        assert!(!v.is_paused());
+    }
+
+    // ------------------------------------------------------------------
+    // Property tests: random sequences of user actions, invariants after
+    // every step.
+    // ------------------------------------------------------------------
+
+    mod properties {
+        use super::*;
+        use proptest::prelude::*;
+        use std::vec::Vec as StdVec;
+
+        #[derive(Clone, Debug)]
+        enum Op {
+            Deposit { user: usize, amount: i128 },
+            Withdraw { user: usize, pct: u8 },
+            Claim { user: usize },
+            Wait { ledgers: u32 },
+            DeployOut { pct: u8 },
+            ReturnIn { pct: u8 },
+            Donate { amount: i128 },
+        }
+
+        const USERS: usize = 4;
+
+        fn op() -> impl Strategy<Value = Op> {
+            prop_oneof![
+                4 => (0..USERS, 2_000i128..5_000_0000000).prop_map(|(user, amount)| Op::Deposit { user, amount }),
+                3 => (0..USERS, 1u8..=100).prop_map(|(user, pct)| Op::Withdraw { user, pct }),
+                2 => (0..USERS).prop_map(|user| Op::Claim { user }),
+                1 => (1u32..40_000).prop_map(|ledgers| Op::Wait { ledgers }),
+                1 => (1u8..=100).prop_map(|pct| Op::DeployOut { pct }),
+                1 => (1u8..=100).prop_map(|pct| Op::ReturnIn { pct }),
+                1 => (1i128..10_0000000).prop_map(|amount| Op::Donate { amount }),
+            ]
+        }
+
+        struct Run<'a> {
+            f: Fixture<'a>,
+            users: StdVec<Address>,
+            allow_donations: bool,
+        }
+
+        impl<'a> Run<'a> {
+            fn new(env: &'a Env, withdrawal_fee: i128, allow_donations: bool) -> Self {
+                // Runs advance the ledger by up to ~1.6M; keep the test token
+                // contracts' storage alive for all of it.
+                env.ledger().with_mut(|l| {
+                    l.min_persistent_entry_ttl = 5_000_000;
+                    l.min_temp_entry_ttl = 5_000_000;
+                    l.max_entry_ttl = 10_000_000;
+                });
+                let f = setup(env);
+                env.budget().reset_unlimited();
+                f.vault.set_param(&symbol_short!("wd_fee"), &withdrawal_fee);
+                let users = (0..USERS).map(|_| funded_user(&f, 0)).collect();
+                Run { f, users, allow_donations }
+            }
+
+            fn rate(&self) -> i128 {
+                self.f.vault.get_exchange_rate()
+            }
+
+            fn apply(&self, op: &Op) {
+                let f = &self.f;
+                match op.clone() {
+                    Op::Deposit { user, amount } => {
+                        let u = &self.users[user];
+                        f.xlm_admin.mint(u, &amount);
+                        let _ = f.vault.try_deposit(u, &amount);
+                    }
+                    Op::Withdraw { user, pct } => {
+                        let u = &self.users[user];
+                        let shares = f.sxlm.balance(u) * pct as i128 / 100;
+                        if shares > 0 {
+                            let _ = f.vault.try_request_withdrawal(u, &shares);
+                        }
+                    }
+                    Op::Claim { user } => {
+                        let u = &self.users[user];
+                        if let Some(r) = f.vault.get_user_withdrawals(u).first() {
+                            let _ = f.vault.try_claim_withdrawal(u, &r.id);
+                        }
+                    }
+                    Op::Wait { ledgers } => {
+                        f.env.ledger().with_mut(|l| l.sequence_number += ledgers);
+                    }
+                    Op::DeployOut { pct } => {
+                        let amount = f.vault.liquidity_buffer() * pct as i128 / 100;
+                        if amount > 0 {
+                            deploy_out(f, amount);
+                        }
+                    }
+                    Op::ReturnIn { pct } => {
+                        let amount = f.vault.deployed_to_strategies() * pct as i128 / 100;
+                        if amount > 0 {
+                            return_in(f, amount);
+                        }
+                    }
+                    Op::Donate { amount } => {
+                        if self.allow_donations {
+                            let donor = funded_user(f, amount);
+                            f.vault.add_liquidity(&donor, &amount);
+                        }
+                    }
+                }
+            }
+
+            /// Invariants that hold after every step of every run.
+            fn check(&self) {
+                let v = &self.f.vault;
+                let idle = v.idle_balance();
+                let deployed = v.deployed_to_strategies();
+                let pending = v.pending_withdrawals();
+                let fees = v.treasury_balance();
+
+                // Assets are derived, never stored: the identity is exact.
+                let expected = idle + deployed - pending - fees;
+                assert_eq!(v.total_assets(), if expected < 0 { 0 } else { expected });
+
+                // Queue liability equals the open requests, to the stroop.
+                let mut open: i128 = 0;
+                for u in self.users.iter() {
+                    for r in v.get_user_withdrawals(u).iter() {
+                        assert!(!r.claimed);
+                        assert_eq!(&r.user, u);
+                        open += r.xlm_amount;
+                    }
+                }
+                assert_eq!(pending, open, "pending liability drifted from open requests");
+
+                // Solvent: everything owed is held or deployed.
+                assert!(idle + deployed >= pending + fees, "vault owes more than it holds");
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+
+            /// No sequence of user actions lowers the exchange rate. Only a
+            /// real loss could, and users cannot cause one.
+            #[test]
+            fn the_rate_never_falls(ops in proptest::collection::vec(op(), 1..40)) {
+                let env = Env::default();
+                let run = Run::new(&env, DEFAULT_WITHDRAWAL_FEE_BPS, true);
+                let mut rate = run.rate();
+                for op in ops.iter() {
+                    run.apply(op);
+                    run.check();
+                    let next = run.rate();
+                    prop_assert!(next >= rate, "rate fell from {} to {} on {:?}", rate, next, op);
+                    rate = next;
+                }
+            }
+
+            /// With no fees and no donations nothing flows in, so the rate may
+            /// move only by rounding, which always favours the pool and is
+            /// worth less than one share per step.
+            #[test]
+            fn the_rate_never_rises_without_inflow(ops in proptest::collection::vec(op(), 1..40)) {
+                let env = Env::default();
+                let run = Run::new(&env, 0, false);
+                let mut rate = run.rate();
+                for op in ops.iter() {
+                    run.apply(op);
+                    run.check();
+                    let next = run.rate();
+                    let supply = run.f.vault.total_sxlm_supply();
+                    if supply > 0 {
+                        let bound = (rate + RATE_PRECISION) / supply + 1;
+                        prop_assert!(
+                            next - rate <= bound,
+                            "rate rose {} (bound {}) with no inflow on {:?}", next - rate, bound, op
+                        );
+                    }
+                    rate = next;
+                }
+            }
+
+            /// Depositing and immediately withdrawing never returns more than
+            /// was put in, and loses no more than the fee plus rounding.
+            #[test]
+            fn deposit_then_withdraw_is_symmetric(
+                warmup in proptest::collection::vec(op(), 0..20),
+                amount in 10_000i128..10_000_0000000,
+            ) {
+                let env = Env::default();
+                let run = Run::new(&env, DEFAULT_WITHDRAWAL_FEE_BPS, true);
+                // The first deposit locks MINIMUM_LIQUIDITY shares by design;
+                // the property is about every deposit after it.
+                let seed = funded_user(&run.f, 100_0000000);
+                run.f.vault.deposit(&seed, &100_0000000);
+                for op in warmup.iter() {
+                    run.apply(op);
+                }
+                // Keep the round trip instant, so the payout is measured directly.
+                let deployed = run.f.vault.deployed_to_strategies();
+                if deployed > 0 {
+                    return_in(&run.f, deployed);
+                }
+
+                let user = funded_user(&run.f, amount);
+                if run.f.vault.try_deposit(&user, &amount).is_err() {
+                    return Ok(());
+                }
+                let shares = run.f.sxlm.balance(&user);
+                prop_assume!(shares > 0);
+                let rate = run.rate();
+                run.f.vault.request_withdrawal(&user, &shares);
+                let back = run.f.xlm.balance(&user);
+
+                prop_assert!(back <= amount, "round trip paid {} for {}", back, amount);
+                let fee = amount * DEFAULT_WITHDRAWAL_FEE_BPS / BPS_DENOMINATOR;
+                let rounding = rate / RATE_PRECISION + 2;
+                prop_assert!(
+                    back + fee + rounding >= amount,
+                    "round trip lost {} on {} (fee {}, rounding {})", amount - back, amount, fee, rounding
+                );
+            }
+
+            /// Every queued request pays exactly what it recorded, once.
+            #[test]
+            fn claims_pay_exactly_once(ops in proptest::collection::vec(op(), 1..40)) {
+                let env = Env::default();
+                let run = Run::new(&env, DEFAULT_WITHDRAWAL_FEE_BPS, true);
+                for op in ops.iter() {
+                    run.apply(op);
+                }
+                let deployed = run.f.vault.deployed_to_strategies();
+                if deployed > 0 {
+                    return_in(&run.f, deployed);
+                }
+                env.ledger().with_mut(|l| l.sequence_number += 200_000);
+
+                for u in run.users.iter() {
+                    for r in run.f.vault.get_user_withdrawals(u).iter() {
+                        let before = run.f.xlm.balance(u);
+                        run.f.vault.claim_withdrawal(u, &r.id);
+                        prop_assert_eq!(run.f.xlm.balance(u) - before, r.xlm_amount);
+                        prop_assert!(run.f.vault.try_claim_withdrawal(u, &r.id).is_err());
+                    }
+                }
+                prop_assert_eq!(run.f.vault.pending_withdrawals(), 0);
+                run.check();
+            }
+        }
     }
 }
 

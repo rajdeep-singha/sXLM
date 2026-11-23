@@ -1,0 +1,77 @@
+# Verifiable contract builds.
+#
+# Pushing a tag such as `contracts-v0.3.0` builds all five contracts with
+# stellar-expert/soroban-build-workflow, publishes a GitHub release with the
+# optimised WASM files and their SHA-256 hashes, and attaches a build
+# attestation to each.
+#
+# A contract uploaded to the network from one of these release files is shown
+# as verified source on stellar.expert. Upgrades must therefore use the WASM
+# downloaded from the release, never a local build: a local build produces a
+# different hash and cannot be verified. See docs/OPERATIONS.md, "Verified
+# upgrades".
+
+name: Release contracts
+
+on:
+  push:
+    tags:
+      - "contracts-v*"
+
+# Required at the top level by the reusable workflow, to create the release
+# and the attestations.
+permissions:
+  id-token: write
+  contents: write
+  attestations: write
+
+jobs:
+  release-token:
+    uses: stellar-expert/soroban-build-workflow/.github/workflows/release.yml@main
+    with:
+      release_name: ${{ github.ref_name }}
+      release_description: "StelloFi contracts ${{ github.ref_name }}"
+      relative_path: "contracts"
+      package: "sxlm-token"
+    secrets:
+      release_token: ${{ secrets.GITHUB_TOKEN }}
+
+  release-vault:
+    uses: stellar-expert/soroban-build-workflow/.github/workflows/release.yml@main
+    with:
+      release_name: ${{ github.ref_name }}
+      release_description: "StelloFi contracts ${{ github.ref_name }}"
+      relative_path: "contracts"
+      package: "sxlm-vault"
+    secrets:
+      release_token: ${{ secrets.GITHUB_TOKEN }}
+
+  release-lending:
+    uses: stellar-expert/soroban-build-workflow/.github/workflows/release.yml@main
+    with:
+      release_name: ${{ github.ref_name }}
+      release_description: "StelloFi contracts ${{ github.ref_name }}"
+      relative_path: "contracts"
+      package: "sxlm-lending"
+    secrets:
+      release_token: ${{ secrets.GITHUB_TOKEN }}
+
+  release-lp-pool:
+    uses: stellar-expert/soroban-build-workflow/.github/workflows/release.yml@main
+    with:
+      release_name: ${{ github.ref_name }}
+      release_description: "StelloFi contracts ${{ github.ref_name }}"
+      relative_path: "contracts"
+      package: "sxlm-lp-pool"
+    secrets:
+      release_token: ${{ secrets.GITHUB_TOKEN }}
+
+  release-governance:
+    uses: stellar-expert/soroban-build-workflow/.github/workflows/release.yml@main
+    with:
+      release_name: ${{ github.ref_name }}
+      release_description: "StelloFi contracts ${{ github.ref_name }}"
+      relative_path: "contracts"
+      package: "sxlm-governance"
+    secrets:
+      release_token: ${{ secrets.GITHUB_TOKEN }}

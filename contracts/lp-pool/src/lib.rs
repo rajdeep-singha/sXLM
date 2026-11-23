@@ -1,8 +1,24 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol};
 
 const BPS_DENOMINATOR: i128 = 10_000;
+
+/// Storage layout version, reported by `version()`.
+const CONTRACT_VERSION: u32 = 3;
+
+/// Swap fee when none is stored.
+const DEFAULT_FEE_BPS: i128 = 30; // 0.3%
+
+/// Part of the swap fee taken as protocol fee, when none is stored.
+///
+/// Pools initialised before this field existed have no entry for it. Reading a
+/// missing entry as zero (as versions before 3 did) switched protocol fees off
+/// on the live pool after its upgrade; reading it as the default restores them.
+const DEFAULT_PROTOCOL_FEE_BPS: i128 = 5; // 0.05% of swap input
+
+/// Highest swap fee governance may set.
+const MAX_FEE_BPS: i128 = 100; // 1%
 
 // ---------- TTL constants ----------
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 100_800; // ~7 days
@@ -29,6 +45,8 @@ pub enum DataKey {
     Vault,
     /// Share of protocol fees passed to the vault, in basis points.
     VaultShareBps,
+    /// Governance contract. Once set, parameters need a passed proposal.
+    Governance,
 }
 
 // --- Storage helpers ---
@@ -68,7 +86,48 @@ fn read_fee_bps(env: &Env) -> i128 {
     env.storage()
         .instance()
         .get(&DataKey::FeeBps)
-        .unwrap_or(30) // 0.3%
+        .unwrap_or(DEFAULT_FEE_BPS)
+}
+
+fn read_protocol_fee_bps(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::ProtocolFeeBps)
+        .unwrap_or(DEFAULT_PROTOCOL_FEE_BPS)
+}
+
+fn read_vault_share_bps(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::VaultShareBps)
+        .unwrap_or(DEFAULT_VAULT_SHARE_BPS)
+}
+
+/// Authorise a parameter change: governance once configured, admin until then.
+fn require_param_authority(env: &Env) {
+    match env.storage().instance().get::<DataKey, Address>(&DataKey::Governance) {
+        Some(gov) => gov.require_auth(),
+        None => read_admin(env).require_auth(),
+    }
+}
+
+/// Validate and store one governable parameter.
+fn apply_param(env: &Env, key: Symbol, value: i128) {
+    if key == soroban_sdk::symbol_short!("swap_fee") {
+        assert!(value >= 0 && value <= MAX_FEE_BPS, "swap fee out of range");
+        assert!(value >= read_protocol_fee_bps(env), "swap fee below protocol fee");
+        write_i128(env, &DataKey::FeeBps, value);
+    } else if key == soroban_sdk::symbol_short!("proto_fee") {
+        // The protocol fee is carved out of the swap fee, so it cannot exceed it.
+        assert!(value >= 0 && value <= read_fee_bps(env), "protocol fee above swap fee");
+        write_i128(env, &DataKey::ProtocolFeeBps, value);
+    } else if key == soroban_sdk::symbol_short!("vlt_share") {
+        assert!(value >= 0 && value <= BPS_DENOMINATOR, "vault share out of range");
+        write_i128(env, &DataKey::VaultShareBps, value);
+    } else {
+        panic!("unknown parameter");
+    }
+    env.events().publish((soroban_sdk::symbol_short!("param"),), (key, value));
 }
 
 fn read_admin(env: &Env) -> Address {
@@ -160,9 +219,14 @@ impl LpPoolContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::SxlmToken, &sxlm_token);
         env.storage().instance().set(&DataKey::NativeToken, &native_token);
+        assert!((fee_bps as i128) <= MAX_FEE_BPS, "swap fee out of range");
+        assert!(
+            (fee_bps as i128) >= DEFAULT_PROTOCOL_FEE_BPS,
+            "swap fee below protocol fee"
+        );
         env.storage().instance().set(&DataKey::FeeBps, &(fee_bps as i128));
         env.storage().instance().set(&DataKey::Vault, &vault);
-        write_i128(&env, &DataKey::ProtocolFeeBps, 5); // 0.05% of swap input
+        write_i128(&env, &DataKey::ProtocolFeeBps, DEFAULT_PROTOCOL_FEE_BPS);
         write_i128(&env, &DataKey::AccruedProtocolFees, 0);
         extend_instance(&env);
     }
@@ -316,10 +380,17 @@ impl LpPoolContract {
         token::Client::new(&env, &native).transfer(&user, &env.current_contract_address(), &xlm_amount);
         token::Client::new(&env, &sxlm).transfer(&env.current_contract_address(), &user, &sxlm_out);
 
-        // Protocol fee: carve out a portion of the LP fee for the protocol
+        // Protocol fee: carve out a portion of the LP fee for the protocol.
+        // Bounded by the fee itself, so a misconfigured pair can never take
+        // more than the swapper paid.
         let total_fee = xlm_amount - amount_after_fee;
-        let protocol_fee_bps = read_i128(&env, &DataKey::ProtocolFeeBps);
-        let protocol_cut = total_fee * protocol_fee_bps / fee_bps;
+        let protocol_fee_bps = read_protocol_fee_bps(&env);
+        let protocol_cut = if fee_bps <= 0 {
+            0
+        } else {
+            let cut = total_fee * protocol_fee_bps / fee_bps;
+            if cut > total_fee { total_fee } else { cut }
+        };
 
         // Reserve gets full amount MINUS protocol cut
         write_i128(&env, &DataKey::ReserveXlm, reserve_xlm + xlm_amount - protocol_cut);
@@ -397,11 +468,7 @@ impl LpPoolContract {
         let native = read_native_token(&env);
         let native_client = token::Client::new(&env, &native);
 
-        let share_bps: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::VaultShareBps)
-            .unwrap_or(DEFAULT_VAULT_SHARE_BPS);
+        let share_bps = read_vault_share_bps(&env);
 
         let to_vault = match env.storage().instance().get::<DataKey, Address>(&DataKey::Vault) {
             Some(vault) => {
@@ -431,11 +498,65 @@ impl LpPoolContract {
     }
 
     /// Set protocol fee in basis points (portion of LP fee taken for protocol).
+    /// Same power as `set_param("proto_fee", ..)`: governance once configured,
+    /// the admin until then. Kept for existing callers.
     pub fn set_protocol_fee_bps(env: Env, bps: u32) {
+        require_param_authority(&env);
+        extend_instance(&env);
+        apply_param(&env, soroban_sdk::symbol_short!("proto_fee"), bps as i128);
+    }
+
+    /// Apply a governance-approved parameter change.
+    pub fn set_param(env: Env, key: Symbol, value: i128) {
+        require_param_authority(&env);
+        extend_instance(&env);
+        apply_param(&env, key, value);
+    }
+
+    /// Hand parameter control to the governance contract, once.
+    pub fn set_governance(env: Env, governance: Address) {
         let admin = read_admin(&env);
         admin.require_auth();
+        if env.storage().instance().has(&DataKey::Governance) {
+            panic!("governance already set");
+        }
         extend_instance(&env);
-        write_i128(&env, &DataKey::ProtocolFeeBps, bps as i128);
+        env.storage().instance().set(&DataKey::Governance, &governance);
+        env.events().publish((soroban_sdk::symbol_short!("gov_set"),), governance);
+    }
+
+    pub fn governance(env: Env) -> Address {
+        extend_instance(&env);
+        env.storage().instance().get(&DataKey::Governance).expect("governance not configured")
+    }
+
+    /// Transfer the admin role. Both the current and the new admin must sign.
+    pub fn set_admin(env: Env, new_admin: Address) {
+        let admin = read_admin(&env);
+        admin.require_auth();
+        new_admin.require_auth();
+        extend_instance(&env);
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish((soroban_sdk::symbol_short!("admin"),), (admin, new_admin));
+    }
+
+    pub fn admin(env: Env) -> Address {
+        extend_instance(&env);
+        read_admin(&env)
+    }
+
+    pub fn fee_bps(env: Env) -> i128 {
+        extend_instance(&env);
+        read_fee_bps(&env)
+    }
+
+    pub fn vault_share_bps(env: Env) -> i128 {
+        extend_instance(&env);
+        read_vault_share_bps(&env)
+    }
+
+    pub fn version(_env: Env) -> u32 {
+        CONTRACT_VERSION
     }
 
     // --- Views ---
@@ -449,7 +570,7 @@ impl LpPoolContract {
     /// Returns protocol fee in basis points.
     pub fn protocol_fee_bps(env: Env) -> i128 {
         extend_instance(&env);
-        read_i128(&env, &DataKey::ProtocolFeeBps)
+        read_protocol_fee_bps(&env)
     }
 
     /// Returns (reserve_xlm, reserve_sxlm).
@@ -493,6 +614,7 @@ pub trait VaultRateInterface {
 
 #[cfg(test)]
 mod test {
+    extern crate std;
     use super::*;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{symbol_short, token::StellarAssetClient, Env};
@@ -739,5 +861,129 @@ mod test {
         client.add_liquidity(&user, &100_000_0000000, &100_000_0000000);
         client.swap_sxlm_to_xlm(&user, &10_000_0000000, &0);
         assert_eq!(client.accrued_protocol_fees(), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // Version 3
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn reports_version_3() {
+        let (env, id, ..) = setup_test();
+        assert_eq!(LpPoolContractClient::new(&env, &id).version(), 3);
+    }
+
+    /// The live pool has no ProtocolFeeBps entry: it was initialised before
+    /// the field existed. Version 3 reads the missing entry as the default, so
+    /// protocol fees resume on the first swap after the upgrade.
+    #[test]
+    fn the_live_pool_resumes_protocol_fees_after_upgrade() {
+        #[derive(Clone)]
+        #[contracttype]
+        enum Orphan {
+            Paused,
+        }
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        let sxlm = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
+        let native = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
+        let vault = env.register_contract(None, MockVault);
+        let id = env.register_contract(None, LpPoolContract);
+        StellarAssetClient::new(&env, &native).mint(&id, &119_999_999);
+        StellarAssetClient::new(&env, &sxlm).mint(&id, &60_000_000);
+        StellarAssetClient::new(&env, &native).mint(&user, &10_0000000);
+
+        // Instance storage exactly as read from mainnet on 2026-11-23.
+        env.as_contract(&id, || {
+            let st = env.storage().instance();
+            st.set(&DataKey::Admin, &admin);
+            st.set(&DataKey::FeeBps, &30i128);
+            st.set(&DataKey::Initialized, &true);
+            st.set(&DataKey::NativeToken, &native);
+            st.set(&DataKey::ReserveSxlm, &60_000_000i128);
+            st.set(&DataKey::ReserveXlm, &119_999_999i128);
+            st.set(&DataKey::SxlmToken, &sxlm);
+            st.set(&DataKey::TotalLpSupply, &84_852_812i128);
+            st.set(&DataKey::Vault, &vault);
+            st.set(&Orphan::Paused, &false);
+        });
+
+        let c = LpPoolContractClient::new(&env, &id);
+        assert_eq!(c.protocol_fee_bps(), 5, "missing entry read as zero");
+        assert_eq!(c.fee_bps(), 30);
+        assert_eq!(c.vault_share_bps(), 8_000);
+        assert_eq!(c.get_reserves(), (119_999_999, 60_000_000));
+
+        c.swap_xlm_to_sxlm(&user, &1_0000000, &0);
+        assert!(c.accrued_protocol_fees() > 0, "protocol fee still off after upgrade");
+    }
+
+    #[test]
+    fn the_protocol_fee_cannot_exceed_the_swap_fee() {
+        let (env, id, ..) = setup_test();
+        let c = LpPoolContractClient::new(&env, &id);
+        assert!(c.try_set_protocol_fee_bps(&31).is_err());
+        assert!(c.try_set_param(&symbol_short!("proto_fee"), &31).is_err());
+        assert!(c.try_set_param(&symbol_short!("swap_fee"), &4).is_err(), "swap fee below protocol fee");
+        assert!(c.try_set_param(&symbol_short!("swap_fee"), &101).is_err());
+        assert!(c.try_set_param(&symbol_short!("vlt_share"), &10_001).is_err());
+        assert!(c.try_set_param(&symbol_short!("nope"), &1).is_err());
+
+        c.set_param(&symbol_short!("swap_fee"), &50);
+        c.set_param(&symbol_short!("proto_fee"), &50);
+        c.set_param(&symbol_short!("vlt_share"), &9_000);
+        assert_eq!(c.fee_bps(), 50);
+        assert_eq!(c.protocol_fee_bps(), 50);
+        assert_eq!(c.vault_share_bps(), 9_000);
+    }
+
+    /// The protocol cut is bounded by the fee the swapper paid, whatever is
+    /// stored. Before version 3 a stored protocol fee above the swap fee took
+    /// more than the fee out of the reserve.
+    #[test]
+    fn the_protocol_cut_never_exceeds_the_fee_paid() {
+        let (env, id, _, _, user, _) = setup_test();
+        let c = LpPoolContractClient::new(&env, &id);
+        c.add_liquidity(&user, &10_000_0000000, &10_000_0000000);
+        env.as_contract(&id, || write_i128(&env, &DataKey::ProtocolFeeBps, 90));
+
+        let amount = 100_0000000;
+        c.swap_xlm_to_sxlm(&user, &amount, &0);
+        let fee_paid = amount - amount * (BPS_DENOMINATOR - 30) / BPS_DENOMINATOR;
+        assert!(c.accrued_protocol_fees() <= fee_paid);
+    }
+
+    #[test]
+    fn parameters_answer_to_governance_once_set() {
+        let (env, id, _, _, _, admin) = setup_test();
+        let c = LpPoolContractClient::new(&env, &id);
+        c.set_protocol_fee_bps(&10);
+        assert_eq!(env.auths()[0].0, admin);
+
+        let gov = Address::generate(&env);
+        c.set_governance(&gov);
+        assert_eq!(c.governance(), gov);
+        assert!(c.try_set_governance(&Address::generate(&env)).is_err(), "governance set twice");
+
+        c.set_protocol_fee_bps(&20);
+        assert_eq!(env.auths()[0].0, gov, "the admin key bypassed governance");
+        c.set_param(&symbol_short!("proto_fee"), &25);
+        assert_eq!(env.auths()[0].0, gov);
+        assert_eq!(c.protocol_fee_bps(), 25);
+    }
+
+    #[test]
+    fn admin_rotation_needs_both_keys() {
+        let (env, id, _, _, _, admin) = setup_test();
+        let c = LpPoolContractClient::new(&env, &id);
+        let next = Address::generate(&env);
+        c.set_admin(&next);
+        let signers: std::vec::Vec<Address> = env.auths().iter().map(|a| a.0.clone()).collect();
+        assert!(signers.contains(&admin));
+        assert!(signers.contains(&next));
+        assert_eq!(c.admin(), next);
     }
 }
