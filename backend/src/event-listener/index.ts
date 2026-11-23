@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { config } from "../config/index.js";
+import { rpcRequest } from "../stellar/network.js";
 import { getEventBus, EventType } from "../event-bus/index.js";
 import { xdr, scValToNative } from "@stellar/stellar-sdk";
 
@@ -60,40 +61,26 @@ export class EventListenerService {
 
   private async pollContractEvents(): Promise<void> {
     try {
-      const response = await fetch(config.stellar.rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "getEvents",
-          params: {
-            startLedger: lastLedger || undefined,
-            filters: [
-              {
-                type: "contract",
-                contractIds: [
-                  config.contracts.stakingContractId,
-                  config.contracts.sxlmTokenContractId,
-                  config.contracts.lendingContractId,
-                  config.contracts.lpPoolContractId,
-                  config.contracts.governanceContractId,
-                ].filter(Boolean),
-              },
-            ],
-            pagination: { limit: 100 },
-          },
-        }),
-      });
-
-      if (!response.ok) return;
-
-      const data = (await response.json()) as {
-        result?: {
-          events: RawSorobanEvent[];
-          latestLedger: number;
-        };
-      };
+      const result = await rpcRequest<{ events: RawSorobanEvent[]; latestLedger: number }>(
+        "getEvents",
+        {
+          startLedger: lastLedger || undefined,
+          filters: [
+            {
+              type: "contract",
+              contractIds: [
+                config.contracts.stakingContractId,
+                config.contracts.sxlmTokenContractId,
+                config.contracts.lendingContractId,
+                config.contracts.lpPoolContractId,
+                config.contracts.governanceContractId,
+              ].filter(Boolean),
+            },
+          ],
+          pagination: { limit: 100 },
+        }
+      ).catch(() => undefined);
+      const data = { result };
 
       if (!data.result?.events) return;
 

@@ -10,6 +10,7 @@ import {
   BASE_FEE,
 } from "@stellar/stellar-sdk";
 import { config } from "../../config/index.js";
+import { getRpc } from "../../stellar/network.js";
 import { PrismaClient } from "@prisma/client";
 
 /**
@@ -20,13 +21,34 @@ import { PrismaClient } from "@prisma/client";
  * execution, so the set is fixed here rather than accepted as free text.
  */
 const GOVERNABLE_PARAMS = {
-  fee_bps:   { target: "vault",   symbol: "fee_bps",   label: "Protocol fee (bps)",            max: 10000 },
-  cooldown:  { target: "vault",   symbol: "cooldown",  label: "Withdrawal cooldown (ledgers)", max: 2_000_000 },
-  coll_fact: { target: "lending", symbol: "coll_fact", label: "Collateral factor (bps)",       max: 10000 },
-  liq_thres: { target: "lending", symbol: "liq_thres", label: "Liquidation threshold (bps)",   max: 10000 },
-  bor_rate:  { target: "lending", symbol: "bor_rate",  label: "Borrow rate (bps)",             max: 10000 },
-  max_util:  { target: "lending", symbol: "max_util",  label: "Reserve utilisation cap (bps)", max: 10000 },
+  fee_bps:    { target: "vault",   symbol: "fee_bps",   label: "Protocol fee (bps)",                    max: 10000 },
+  cooldown:   { target: "vault",   symbol: "cooldown",  label: "Withdrawal cooldown (ledgers)",         max: 2_000_000 },
+  wd_fee:     { target: "vault",   symbol: "wd_fee",    label: "Withdrawal fee (bps)",                  max: 500 },
+  flash_fee:  { target: "vault",   symbol: "flash_fee", label: "Flash loan fee (bps)",                  max: 500 },
+  coll_fact:  { target: "lending", symbol: "coll_fact", label: "Collateral factor (bps)",               max: 10000 },
+  liq_thres:  { target: "lending", symbol: "liq_thres", label: "Liquidation threshold (bps)",           max: 10000 },
+  bor_rate:   { target: "lending", symbol: "bor_rate",  label: "Borrow rate (bps)",                     max: 10000 },
+  max_util:   { target: "lending", symbol: "max_util",  label: "Reserve utilisation cap (bps)",         max: 10000 },
+  liq_fee:    { target: "lending", symbol: "liq_fee",   label: "Liquidation surcharge (bps)",           max: 499 },
+  lend_share: { target: "lending", symbol: "vlt_share", label: "Lending interest to holders (bps)",     max: 10000 },
+  swap_fee:   { target: "lp",      symbol: "swap_fee",  label: "LP swap fee (bps)",                     max: 100 },
+  proto_fee:  { target: "lp",      symbol: "proto_fee", label: "LP protocol fee (bps)",                 max: 100 },
+  lp_share:   { target: "lp",      symbol: "vlt_share", label: "LP protocol fees to holders (bps)",     max: 10000 },
 } as const;
+
+/** Voting period of the deployed governance contract (7 days on mainnet). */
+const VOTING_PERIOD_LEDGERS = Number(process.env["GOVERNANCE_VOTING_PERIOD_LEDGERS"] ?? 120_960);
+
+function targetContract(target: "vault" | "lending" | "lp"): string {
+  switch (target) {
+    case "vault":
+      return config.contracts.stakingContractId;
+    case "lending":
+      return config.contracts.lendingContractId;
+    case "lp":
+      return config.contracts.lpPoolContractId;
+  }
+}
 
 type ParamKey = keyof typeof GOVERNABLE_PARAMS;
 
@@ -126,7 +148,7 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
   opts
 ) => {
   const { prisma } = opts;
-  const server = new rpc.Server(config.stellar.rpcUrl);
+  const server = getRpc();
   const govContractId = config.contracts.governanceContractId;
 
   /**
@@ -144,10 +166,7 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
         });
       }
 
-      const targetId =
-        param.target === "vault"
-          ? config.contracts.stakingContractId
-          : config.contracts.lendingContractId;
+      const targetId = targetContract(param.target);
 
       const result = await buildContractTx(
         server,
@@ -163,7 +182,7 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
       );
 
       // Also store in DB for quick querying
-      const votingPeriodLedgers = 17280; // ~24h
+      const votingPeriodLedgers = VOTING_PERIOD_LEDGERS;
       await prisma.governanceProposal.create({
         data: {
           proposer: body.userAddress,
@@ -467,18 +486,28 @@ export const governanceRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = as
   fastify.get("/governance/params", async () => {
     const vaultId = config.contracts.stakingContractId;
     const lendingId = config.contracts.lendingContractId;
+    const lpId = config.contracts.lpPoolContractId;
 
     const sources: Array<{
       key: keyof typeof GOVERNABLE_PARAMS;
       contract: string;
       method: string;
     }> = [
-      { key: "fee_bps",   contract: vaultId,   method: "protocol_fee_bps" },
-      { key: "cooldown",  contract: vaultId,   method: "get_cooldown_period" },
-      { key: "coll_fact", contract: lendingId, method: "get_collateral_factor" },
-      { key: "liq_thres", contract: lendingId, method: "get_liquidation_threshold" },
-      { key: "bor_rate",  contract: lendingId, method: "get_borrow_rate" },
-      { key: "max_util",  contract: lendingId, method: "get_max_utilization" },
+      { key: "fee_bps",    contract: vaultId,   method: "protocol_fee_bps" },
+      { key: "cooldown",   contract: vaultId,   method: "get_cooldown_period" },
+      { key: "wd_fee",     contract: vaultId,   method: "withdrawal_fee_bps" },
+      { key: "flash_fee",  contract: vaultId,   method: "flash_fee_bps" },
+      { key: "coll_fact",  contract: lendingId, method: "get_collateral_factor" },
+      { key: "liq_thres",  contract: lendingId, method: "get_liquidation_threshold" },
+      { key: "bor_rate",   contract: lendingId, method: "get_borrow_rate" },
+      { key: "max_util",   contract: lendingId, method: "get_max_utilization" },
+      { key: "liq_fee",    contract: lendingId, method: "get_liquidation_fee_bps" },
+      { key: "lend_share", contract: lendingId, method: "get_vault_share_bps" },
+      // The three LP views below exist from contract version 3; before the
+      // upgrade they read as unknown.
+      { key: "swap_fee",   contract: lpId,      method: "fee_bps" },
+      { key: "proto_fee",  contract: lpId,      method: "protocol_fee_bps" },
+      { key: "lp_share",   contract: lpId,      method: "vault_share_bps" },
     ];
 
     const params = await Promise.all(

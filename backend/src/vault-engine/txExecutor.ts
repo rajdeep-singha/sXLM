@@ -7,8 +7,9 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { config } from "../config/index.js";
+import { getRpc } from "../stellar/network.js";
 
-const server = new rpc.Server(config.stellar.rpcUrl);
+const server = getRpc();
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_BASE_MS = 1000;

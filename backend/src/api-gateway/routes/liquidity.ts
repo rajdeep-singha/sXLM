@@ -10,6 +10,7 @@ import {
   BASE_FEE,
 } from "@stellar/stellar-sdk";
 import { config } from "../../config/index.js";
+import { getRpc } from "../../stellar/network.js";
 import { PrismaClient } from "@prisma/client";
 
 const addLiquiditySchema = z.object({
@@ -92,7 +93,7 @@ export const liquidityRoutes: FastifyPluginAsync<{ prisma: PrismaClient }> = asy
   opts
 ) => {
   const { prisma } = opts;
-  const server = new rpc.Server(config.stellar.rpcUrl);
+  const server = getRpc();
   const lpContractId = config.contracts.lpPoolContractId;
 
   /**

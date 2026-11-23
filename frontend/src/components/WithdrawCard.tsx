@@ -3,9 +3,11 @@ import axios from '../lib/apiClient';
 import { useWallet } from '../hooks/useWallet';
 import { useStaking } from '../hooks/useStaking';
 import { useProtocol } from '../hooks/useProtocol';
+import { useCooldown } from '../hooks/useCooldown';
 import { API_BASE_URL } from '../config/contracts';
 
 export default function WithdrawCard() {
+  const cooldown = useCooldown();
   const { isConnected, connect, publicKey, signTransaction } = useWallet();
   const { unstake, claimWithdrawal, isUnstaking, isClaiming, pendingWithdrawals, fetchPendingWithdrawals, error, clearError, balance, refreshBalance } = useStaking();
   const { stats } = useProtocol();
@@ -118,7 +120,7 @@ export default function WithdrawCard() {
         </div>
         <div className="flex-1 rounded-xl p-3 border border-[#e5e5e5]">
           <p className="text-black font-medium">Delayed</p>
-          <p className="text-[10px] mt-0.5">~24h cooldown</p>
+          <p className="text-[10px] mt-0.5">{cooldown ? `${cooldown} cooldown` : 'Cooldown set on-chain'}</p>
         </div>
       </div>
 

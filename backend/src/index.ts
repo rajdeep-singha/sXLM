@@ -2,7 +2,8 @@ import { PrismaClient } from "@prisma/client";
 import { initEventBus, shutdownEventBus } from "./event-bus/index.js";
 import { StakingEngine } from "./vault-engine/index.js";
 import { RewardEngine } from "./reward-engine/index.js";
-import { RiskEngine } from "./risk-engine/index.js";
+import { Monitor } from "./monitor/index.js";
+import { networkStatus } from "./stellar/network.js";
 import { EventListenerService } from "./event-listener/index.js";
 import { UserService } from "./user-service/index.js";
 import { MetricsCron } from "./metrics-cron/index.js";
@@ -28,16 +29,17 @@ async function main() {
   // Initialize services
   const stakingEngine = new StakingEngine(prisma);
   const rewardEngine = new RewardEngine(prisma);
-  const riskEngine = new RiskEngine(prisma);
+  const monitor = new Monitor(prisma);
   const eventListener = new EventListenerService(prisma);
   const userService = new UserService(prisma);
   const metricsCron = new MetricsCron(prisma);
   const keeperBot = new KeeperBot();
 
-  // The keeper and risk engine act on mainnet: TTL bumps, interest settlement,
-  // LP fee collection, and solvency alerts. The keeper signs with its own key,
-  // never the admin's. Running them from a developer machine means a laptop is
-  // driving production, so they are opt-in rather than automatic.
+  // The keeper and the monitor act on mainnet: TTL bumps, interest settlement
+  // and LP fee collection, and production alerts. The keeper signs with its own
+  // key, never the admin's; the monitor signs nothing. Running them from a
+  // developer machine means a laptop is driving production (and paging
+  // people), so they are opt-in rather than automatic.
   const runAutomation = process.env["RUN_AUTOMATION"] === "true";
 
   await stakingEngine.initialize();
@@ -47,10 +49,14 @@ async function main() {
   await metricsCron.initialize();
 
   if (runAutomation) {
-    await riskEngine.initialize();
+    try {
+      await monitor.initialize();
+    } catch (err) {
+      console.error("[Startup] MONITOR NOT RUNNING:", err);
+    }
     try {
       await keeperBot.initialize();
-      console.log("[Startup] Automation ON — keeper and risk engine are live");
+      console.log("[Startup] Automation ON — keeper and monitor are live");
     } catch (err) {
       // A missing or misconfigured keeper key must not take the API down.
       // Contract TTLs carry about 30 days of buffer, so this is loud, not fatal.
@@ -58,7 +64,7 @@ async function main() {
     }
   } else {
     console.log(
-      "[Startup] Automation OFF — keeper and risk engine idle. Set RUN_AUTOMATION=true to enable (production only)."
+      "[Startup] Automation OFF — keeper and monitor idle. Set RUN_AUTOMATION=true to enable (production only)."
     );
   }
 
@@ -68,6 +74,12 @@ async function main() {
     stakingEngine,
     rewardEngine,
     userService,
+    health: () => ({
+      automation: runAutomation,
+      keeper: keeperBot.status(),
+      monitor: monitor.status(),
+      endpoints: networkStatus(),
+    }),
   });
 
   console.log("=== All services running ===");
@@ -78,7 +90,7 @@ async function main() {
     await server.close();
     await stakingEngine.shutdown();
     await rewardEngine.shutdown();
-    await riskEngine.shutdown();
+    await monitor.shutdown();
     await eventListener.shutdown();
     await userService.shutdown();
     await metricsCron.shutdown();

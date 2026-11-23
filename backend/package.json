@@ -16,7 +16,8 @@
     "test:run": "vitest run",
     "lint": "tsc --noEmit",
     "seed": "tsx prisma/seed.ts",
-    "multisig": "tsx src/multisig/cli.ts"
+    "multisig": "tsx src/multisig/cli.ts",
+    "alerts": "tsx src/monitor/cli.ts"
   },
   "dependencies": {
     "fastify": "^5.2.1",

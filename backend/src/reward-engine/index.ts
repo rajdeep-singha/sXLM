@@ -31,11 +31,12 @@ export class RewardEngine {
       }
     }, config.protocol.rewardSnapshotIntervalMs);
 
-    // NOTE: Simulated APR distribution is DISABLED.
-    // Real yield is harvested by the KeeperBot from lending interest every 6h.
-    // RewardEngine only handles snapshots and APY tracking.
+    // Simulated APR distribution is disabled. Real yield reaches the vault
+    // on-chain: the KeeperBot calls settle_interest and collect_protocol_fees,
+    // which transfer XLM to the vault directly. This engine only snapshots
+    // and tracks APY.
     console.log(
-      `[RewardEngine] Initialized, snapshotting every ${config.protocol.rewardSnapshotIntervalMs / 1000}s (reward distribution handled by KeeperBot)`
+      `[RewardEngine] Initialized, snapshotting every ${config.protocol.rewardSnapshotIntervalMs / 1000}s`
     );
   }
 

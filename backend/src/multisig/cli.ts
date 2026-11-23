@@ -12,8 +12,9 @@
  */
 
 import { readFileSync } from "node:fs";
-import { Account, Horizon } from "@stellar/stellar-sdk";
+import { Account } from "@stellar/stellar-sdk";
 import { config } from "../config/index.js";
+import { loadAccount } from "../stellar/network.js";
 import {
   buildConversionTransaction,
   checkAccountMatchesPlan,
@@ -49,15 +50,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const horizon = new Horizon.Server(config.stellar.horizonUrl);
-
   switch (command) {
     case "check":
       console.log("\nPlan is valid.");
       return;
 
     case "build": {
-      const loaded = await horizon.loadAccount(plan.adminPublicKey);
+      const loaded = await loadAccount(plan.adminPublicKey);
       const account = new Account(loaded.accountId(), loaded.sequenceNumber());
       const tx = buildConversionTransaction(account, plan, config.stellar.networkPassphrase);
       console.log(`\n${tx.operations.length} operations, valid for 1 hour. Unsigned XDR:\n`);
@@ -66,7 +65,7 @@ async function main(): Promise<void> {
     }
 
     case "verify": {
-      const loaded = await horizon.loadAccount(plan.adminPublicKey);
+      const loaded = await loadAccount(plan.adminPublicKey);
       const mismatches = checkAccountMatchesPlan(loaded, plan);
       if (mismatches.length > 0) {
         console.error(`\nAccount does not match the plan:\n- ${mismatches.join("\n- ")}`);

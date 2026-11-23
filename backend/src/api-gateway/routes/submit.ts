@@ -6,10 +6,11 @@ import {
   Contract,
   Address,
   nativeToScVal,
-  scValToNative,
   BASE_FEE,
 } from "@stellar/stellar-sdk";
 import { config } from "../../config/index.js";
+import { getRpc, latestLedgerSequence, rpcRequest } from "../../stellar/network.js";
+import { openWithdrawalsFor, pickWithdrawal } from "../../vault-engine/withdrawalLookup.js";
 import { StakingEngine } from "../../vault-engine/index.js";
 
 const submitSchema = z.object({
@@ -21,64 +22,11 @@ const claimSchema = z.object({
   withdrawalId: z.string(),
 });
 
-interface WithdrawalEntry {
-  user: string;
-  claimed: boolean;
-  xlm_amount: string;
-  unlock_ledger: number;
-}
-
-/**
- * Scan the staking contract's withdrawal queue to find the contract-side
- * withdrawal ID for a given user address. The contract uses a global 0-based
- * counter while the DB uses 1-based auto-increment, so they diverge for
- * multi-user scenarios. Returns { id, entry } or null if not found.
- */
-async function findContractWithdrawal(
-  server: rpc.Server,
-  userAddress: string,
-  maxScan = 50,
-): Promise<{ id: number; entry: WithdrawalEntry } | null> {
-  const stakingContract = new Contract(config.contracts.stakingContractId);
-  const adminAccount = await server.getAccount(config.admin.publicKey);
-
-  for (let id = 0; id < maxScan; id++) {
-    try {
-      const tx = new TransactionBuilder(adminAccount, {
-        fee: BASE_FEE,
-        networkPassphrase: config.stellar.networkPassphrase,
-      })
-        .addOperation(
-          stakingContract.call(
-            "get_withdrawal",
-            nativeToScVal(id, { type: "u64" })
-          )
-        )
-        .setTimeout(30)
-        .build();
-
-      const sim = await server.simulateTransaction(tx);
-
-      if (!rpc.Api.isSimulationSuccess(sim) || !sim.result) break; // past end of queue
-
-      const entry = scValToNative(sim.result.retval) as WithdrawalEntry;
-
-      if (entry.user === userAddress && !entry.claimed) {
-        return { id, entry };
-      }
-    } catch {
-      break; // no more entries
-    }
-  }
-
-  return null;
-}
-
 export const submitRoutes: FastifyPluginAsync<{ stakingEngine: StakingEngine }> = async (
   fastify,
   opts
 ) => {
-  const server = new rpc.Server(config.stellar.rpcUrl);
+  const server = getRpc();
 
   /**
    * POST /staking/submit
@@ -89,44 +37,36 @@ export const submitRoutes: FastifyPluginAsync<{ stakingEngine: StakingEngine }> 
     try {
       const body = submitSchema.parse(request.body);
 
-      // Send the signed XDR directly to Soroban RPC via JSON-RPC
-      // This avoids TransactionBuilder.fromXDR parsing issues with Soroban envelopes
-      const rpcResponse = await fetch(config.stellar.rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "sendTransaction",
-          params: { transaction: body.signedXdr },
-        }),
-      });
-
-      const rpcResult = await rpcResponse.json() as {
-        result?: { hash: string; status: string; errorResultXdr?: string };
-        error?: { message: string };
-      };
-
-      if (rpcResult.error) {
+      // Send the signed XDR as raw JSON-RPC, with provider failover. This
+      // avoids TransactionBuilder.fromXDR parsing issues with Soroban
+      // envelopes. A resubmission to a second provider is safe: the network
+      // applies a transaction hash at most once.
+      let sent: { hash: string; status: string; errorResultXdr?: string } | undefined;
+      try {
+        sent = await rpcRequest<{ hash: string; status: string; errorResultXdr?: string }>(
+          "sendTransaction",
+          { transaction: body.signedXdr }
+        );
+      } catch (err) {
         return reply.status(400).send({
-          error: `RPC error: ${rpcResult.error.message}`,
+          error: err instanceof Error ? err.message : "RPC error",
         });
       }
 
-      if (!rpcResult.result) {
+      if (!sent) {
         return reply.status(400).send({ error: "No result from RPC" });
       }
 
-      const { hash, status } = rpcResult.result;
+      const { hash, status } = sent;
 
       if (status === "ERROR") {
         return reply.status(400).send({
-          error: `Transaction rejected: ${rpcResult.result.errorResultXdr || "unknown error"}`,
+          error: `Transaction rejected: ${sent.errorResultXdr || "unknown error"}`,
         });
       }
 
       // Poll for confirmation using raw JSON-RPC (avoids SDK XDR parse errors)
-      const confirmed = await pollTransaction(config.stellar.rpcUrl, hash);
+      const confirmed = await pollTransaction(hash);
 
       return {
         txHash: hash,
@@ -144,18 +84,25 @@ export const submitRoutes: FastifyPluginAsync<{ stakingEngine: StakingEngine }> 
    * POST /staking/claim
    * Build an unsigned claim withdrawal transaction for user to sign.
    *
-   * The contract uses a 0-based auto-increment counter for withdrawal IDs,
-   * but the frontend DB uses 1-based auto-increment IDs. To avoid mismatches,
-   * we scan the contract's withdrawal queue to find the correct contract-side
-   * ID for this user rather than blindly trusting the DB-provided withdrawalId.
+   * The contract numbers withdrawals globally from 0 while the frontend DB
+   * numbers its own rows from 1, so the request to claim is looked up
+   * on-chain for this user rather than taken from the DB id.
    */
   fastify.post("/staking/claim", async (request, reply) => {
     try {
       const body = claimSchema.parse(request.body);
 
-      // Find the correct contract withdrawal ID by scanning the queue.
-      // Contract IDs start at 0 and auto-increment globally (not per-user).
-      const withdrawal = await findContractWithdrawal(server, body.userAddress);
+      // The DB id the frontend sends is not the contract's id, so look the
+      // user's requests up on-chain. The DB id is honoured only if it happens
+      // to name one of the user's own open requests.
+      const open = await openWithdrawalsFor(body.userAddress);
+      const latestLedger = await latestLedgerSequence();
+      const preferred = Number.parseInt(body.withdrawalId, 10);
+      const withdrawal = pickWithdrawal(
+        open,
+        latestLedger,
+        Number.isFinite(preferred) ? preferred : undefined
+      );
       if (withdrawal === null) {
         return reply.status(400).send({
           error: "No unclaimed withdrawal found for your address. It may already be claimed or the cooldown has not started yet.",
@@ -164,9 +111,8 @@ export const submitRoutes: FastifyPluginAsync<{ stakingEngine: StakingEngine }> 
 
       // Check cooldown BEFORE simulation — Soroban panic messages don't
       // surface as readable text, just "UnreachableCodeReached".
-      const latestLedger = await server.getLatestLedger();
-      if (latestLedger.sequence < withdrawal.entry.unlock_ledger) {
-        const remaining = withdrawal.entry.unlock_ledger - latestLedger.sequence;
+      if (latestLedger < withdrawal.unlockLedger) {
+        const remaining = withdrawal.unlockLedger - latestLedger;
         const minsLeft = Math.ceil((remaining * 5) / 60);
         return reply.status(400).send({
           error: `Cooldown not expired yet. Approximately ${minsLeft} minutes remaining (~${remaining} ledgers).`,
@@ -220,7 +166,6 @@ export const submitRoutes: FastifyPluginAsync<{ stakingEngine: StakingEngine }> 
  * show the hash and let the user verify manually.
  */
 async function pollTransaction(
-  rpcUrl: string,
   hash: string,
 ): Promise<{ status: string; ledger?: number; pending?: boolean }> {
   // Poll schedule: 6×2s, then 6×4s, then 6×6s ≈ 72s total, 18 requests
@@ -233,33 +178,16 @@ async function pollTransaction(
   for (const intervalMs of schedule) {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
 
-    let rpcResult: {
-      result?: { status: string; ledger?: number; errorResultXdr?: string };
-      error?: { message: string };
-    };
-
+    let result: { status: string; ledger?: number; errorResultXdr?: string } | undefined;
     try {
-      const rpcResponse = await fetch(rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "getTransaction",
-          params: { hash },
-        }),
-      });
-
-      // If rate-limited (429), skip this attempt and wait the next interval
-      if (rpcResponse.status === 429) continue;
-
-      rpcResult = await rpcResponse.json() as typeof rpcResult;
+      result = await rpcRequest<{ status: string; ledger?: number; errorResultXdr?: string }>(
+        "getTransaction",
+        { hash }
+      );
     } catch {
-      // Network error during poll — skip and retry
+      // Every provider failed this round, or rate-limited it — wait and retry.
       continue;
     }
-
-    const result = rpcResult.result;
 
     if (result?.status === "SUCCESS") {
       return { status: "SUCCESS", ledger: result.ledger };
