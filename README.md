@@ -12,7 +12,9 @@ An XLM vault on Stellar, built on Soroban. Deposit XLM to receive **sXLM**, a sh
 |----------|--------|
 | [Deployment Register](docs/DEPLOYMENT_REGISTER.md) | Contract IDs, WASM hashes, roles, services, live vault state |
 | [Accounting and Permission Review](docs/ACCOUNTING_REVIEW.md) | Findings from the August 2026 review and how each was resolved |
-| [Operations Pack](docs/OPERATIONS.md) | Monitoring requirements, keeper and incident runbooks, audit readiness |
+| [Operations Pack](docs/OPERATIONS.md) | Alerts, RPC failover, keeper and incident runbooks, admin multisig, audit readiness |
+| [Mainnet Cutover](docs/MAINNET_CUTOVER.md) | Step-by-step: multisig conversion, verified version-3 upgrade, governance wiring |
+| [Testnet Rehearsal](docs/evidence/testnet-rehearsal.md) | The cutover run end to end on testnet, with every transaction |
 
 ---
 ## User FeedBack
@@ -142,9 +144,9 @@ Default dev server: `http://localhost:5173`.
 |----------|-------------|
 | `DATABASE_URL` | PostgreSQL connection string |
 | `REDIS_URL` | Redis connection string (event bus) |
-| `STELLAR_RPC_URL` | Soroban RPC endpoint |
+| `STELLAR_RPC_URLS` | Soroban RPC endpoints in failover order, comma-separated (`STELLAR_RPC_URL` still accepted; mainnet has public fallbacks) |
 | `STELLAR_NETWORK_PASSPHRASE` | Network passphrase (`Public Global Stellar Network ; September 2015` for mainnet) |
-| `STELLAR_HORIZON_URL` | Horizon API URL |
+| `STELLAR_HORIZON_URLS` | Horizon endpoints in failover order (`STELLAR_HORIZON_URL` still accepted) |
 | `SXLM_TOKEN_CONTRACT_ID` | Deployed sXLM token contract ID |
 | `STAKING_CONTRACT_ID` | Deployed vault contract ID (name kept for deployment compatibility) |
 | `LENDING_CONTRACT_ID` | Deployed lending contract ID |
@@ -154,11 +156,12 @@ Default dev server: `http://localhost:5173`.
 | `HOST` | Bind host (default `0.0.0.0`) |
 | `ADMIN_PUBLIC_KEY` | Contract admin address (used as the source for read-only simulations) |
 | `KEEPER_SECRET_KEY` | Keeper secret key; a separate account from the admin, never one of its signers |
-| `RUN_AUTOMATION` | `true` only on the production instance that runs the keeper and risk engine |
+| `RUN_AUTOMATION` | `true` only on the production instance that runs the keeper and the alert monitor |
 | `JWT_SECRET` | Secret for JWT auth |
 | `JWT_EXPIRES_IN` | JWT expiry (e.g. `24h`) |
-| `GOVERNANCE_WEBHOOK_URL` | Optional webhook for governance events |
-| `SLACK_WEBHOOK_URL` | Optional Slack webhook |
+| `SLACK_WEBHOOK_URL` | Slack destination for production alerts |
+| `ALERT_WEBHOOK_URL` | JSON destination for production alerts (falls back to `GOVERNANCE_WEBHOOK_URL`) |
+| `ALERT_*`, `MONITOR_INTERVAL_MINUTES` | Alert thresholds; see `backend/.env.example` and `docs/OPERATIONS.md` |
 
 ### Frontend (`frontend/.env`)
 
@@ -168,8 +171,8 @@ Prefix with `VITE_` so Vite exposes them to the client:
 |----------|-------------|
 | `VITE_NETWORK_NAME` | e.g. `MAINNET` |
 | `VITE_NETWORK_PASSPHRASE` | Stellar network passphrase |
-| `VITE_HORIZON_URL` | Horizon URL |
-| `VITE_SOROBAN_RPC_URL` | Soroban RPC URL |
+| `VITE_HORIZON_URLS` | Horizon endpoints in failover order (`VITE_HORIZON_URL` still accepted) |
+| `VITE_SOROBAN_RPC_URLS` | Soroban RPC endpoints in failover order (`VITE_SOROBAN_RPC_URL` still accepted) |
 | `VITE_SXLM_TOKEN_CONTRACT_ID` | sXLM token contract ID |
 | `VITE_STAKING_CONTRACT_ID` | Vault contract ID (name kept for deployment compatibility) |
 | `VITE_LENDING_CONTRACT_ID` | Lending contract ID |

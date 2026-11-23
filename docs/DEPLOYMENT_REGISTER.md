@@ -78,3 +78,19 @@ staying up; if it stops for roughly 30 days the contracts archive and become unc
 Lending: 6.2000031 XLM borrowed against 0.7999969 XLM of pool liquidity. The pool has lent out more
 than it currently holds — ordinary for a lending market, but there is no headroom for new borrowing
 or for suppliers to exit until loans are repaid.
+
+## Update: read from the chain on 2026-11-23
+
+Contract addresses, WASM hashes and admin are unchanged since 2026-08-31. Changes since:
+
+| Item | Reading | Note |
+|---|---|---|
+| Keeper account | `GBT4TLLF7NZHQNUYVBXIVS3DVN6QSBGDX7MBT4GIDTOLCQHRILTOOQKV` | Created 2026-11-22 with 11 XLM. Separate from the admin; not a signer. No transaction sent from it yet |
+| Admin last transaction | 2026-10-24 | Keeper duty under the old setup. The admin is still a single key |
+| Contract TTL | live until ledgers 66,282,370 – 66,282,740 | About 37 days at ledger 65,634,706 |
+| `idle_balance` | 816,664,719 | 81.6664719 XLM |
+| `pending_withdrawals` | 38,114,885 | Unchanged: the same three requests (ids 1, 2, 3), claimable for 221–226 days |
+| `get_exchange_rate` | 20,321,760 | 2.0321760 XLM per sXLM |
+| Lending utilisation | 88.68% | 6.2698709 XLM lent, 0.7999969 XLM left in the pool |
+| LP `ProtocolFeeBps` | absent | The pool predates the field and reads it as 0, so swaps have paid no protocol fee since the 2026-08-31 upgrade. Version 3 reads the default, 5 bps |
+| Vault legacy queue | 5 entries | `WithdrawalCounter` = 5; ids 0 and 4 claimed |
