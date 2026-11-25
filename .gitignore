@@ -7,3 +7,7 @@ target/
 # test records 400 withdrawals (16 MB).
 contracts/*/test_snapshots/test/properties/
 contracts/vault/test_snapshots/test/claims_stay_cheap_as_requests_accumulate.1.json
+
+# Private Office documents stay out of this public repository
+*.docx
+.DS_Store
