@@ -26,12 +26,14 @@ import {
   BASE_FEE,
 } from "@stellar/stellar-sdk";
 import { config } from "../config/index.js";
-import { getRpc } from "../stellar/network.js";
+import { getRpc, rpcRequest } from "../stellar/network.js";
+import { submitAndConfirm } from "../stellar/submit.js";
 import { getLpAccruedProtocolFees } from "../vault-engine/contractClient.js";
 import { loadKeeperKeypair } from "./keys.js";
 
 const KEEPER_INTERVAL_MS = 6 * 60 * 60 * 1000;      // 6 hours
 const TTL_BUMP_INTERVAL_MS = 24 * 60 * 60 * 1000;    // 24 hours
+const KEEPER_INCLUSION_FEE = "10000";                // stroops, 0.001 XLM
 
 /**
  * Every contract method the keeper is allowed to call. Each must be
@@ -278,50 +280,37 @@ export class KeeperBot {
 
   private async executeKeeperCall(contractId: string, method: KeeperMethod): Promise<string> {
     const keypair = loadKeeperKeypair(config.keeper.secretKey, config.admin.publicKey);
-    const account = await this.server.getAccount(keypair.publicKey());
-
     const contract = new Contract(contractId);
-    const op = contract.call(method);
 
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: config.stellar.networkPassphrase,
-    })
-      .addOperation(op)
-      .setTimeout(300)
-      .build();
+    const { hash, attempts } = await submitAndConfirm({
+      build: async () => {
+        const account = await this.server.getAccount(keypair.publicKey());
+        const tx = new TransactionBuilder(account, {
+          // Inclusion fee well above the 100-stroop minimum, so upkeep is not
+          // the transaction dropped when the network is busy. prepare adds
+          // the resource fee on top. About 0.001 XLM a call.
+          fee: KEEPER_INCLUSION_FEE,
+          networkPassphrase: config.stellar.networkPassphrase,
+        })
+          .addOperation(contract.call(method))
+          .setTimeout(300)
+          .build();
+        const prepared = await this.server.prepareTransaction(tx);
+        prepared.sign(keypair);
+        return { xdr: prepared.toXDR(), hash: Buffer.from(prepared.hash()).toString("hex") };
+      },
+      // Raw JSON-RPC: these answers are read as plain JSON, so a protocol
+      // newer than the SDK cannot break them with an XDR decoding error.
+      send: (xdr) =>
+        rpcRequest<{ status: string; errorResultXdr?: string }>("sendTransaction", { transaction: xdr }),
+      status: (h) =>
+        rpcRequest<{ status: string; ledger?: number; resultXdr?: string }>("getTransaction", { hash: h }),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    });
 
-    const preparedTx = await this.server.prepareTransaction(tx);
-    preparedTx.sign(keypair);
-
-    const result = await this.server.sendTransaction(preparedTx);
-    if (result.status === "ERROR") {
-      throw new Error(`${contractId}::${method} failed: ${JSON.stringify(result.errorResult)}`);
+    if (attempts > 1) {
+      console.warn(`[KeeperBot] ${method} on ${contractId.slice(0, 6)}… needed ${attempts} attempts`);
     }
-
-    await this.pollTransaction(result.hash);
-    return result.hash;
-  }
-
-  private async pollTransaction(
-    hash: string,
-    maxAttempts = 30,
-    intervalMs = 2000
-  ): Promise<void> {
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const txResponse = await this.server.getTransaction(hash);
-
-      if (txResponse.status === "SUCCESS") {
-        return;
-      }
-
-      if (txResponse.status === "FAILED") {
-        throw new Error(`Transaction ${hash} failed`);
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    }
-
-    throw new Error(`Transaction ${hash} not confirmed after ${maxAttempts} attempts`);
+    return hash;
   }
 }
