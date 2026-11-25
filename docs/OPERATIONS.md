@@ -6,10 +6,9 @@ table says so.
 
 ## Monitoring
 
-The monitor (`backend/src/monitor/`) runs every 5 minutes when `RUN_AUTOMATION=true`. It reads the
-chain, applies the rules below and posts to Slack (`SLACK_WEBHOOK_URL`) and a JSON webhook
-(`ALERT_WEBHOOK_URL`). It signs nothing. A check that cannot read its data raises `check_failed`
-rather than going quiet.
+One check runs today: The risk engine compares vault holdings against obligations every five minutes
+and pauses on a shortfall. Everything else below is a **requirement, not a deployed alert** — stated
+so the gap is visible rather than assumed closed.
 
 | Alert | Fires when | Why it matters |
 |---|---|---|
