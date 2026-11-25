@@ -6,9 +6,10 @@ table says so.
 
 ## Monitoring
 
-One check runs today: The risk engine compares vault holdings against obligations every five minutes
-and pauses on a shortfall. Everything else below is a **requirement, not a deployed alert** — stated
-so the gap is visible rather than assumed closed.
+The monitor (`backend/src/monitor/`) runs every 5 minutes when `RUN_AUTOMATION=true`. It reads the
+chain, applies the rules below and posts to Slack (`SLACK_WEBHOOK_URL`) and a JSON webhook
+(`ALERT_WEBHOOK_URL`). It signs nothing. A check that cannot read its data raises `check_failed`
+rather than going quiet.
 
 | Alert | Fires when | Why it matters |
 |---|---|---|
@@ -219,7 +220,7 @@ The cutover procedure is in `docs/MAINNET_CUTOVER.md`.
 |---|---|---|
 | Contract tests | 122 passing | Unit, attack-path and property tests across five contracts |
 | Property tests | present | Rate never falls; rate never rises without inflow; deposit/withdraw symmetry; queue liability equals open requests; claims pay exactly once; debts add up across random borrow/repay/liquidate/rate-change sequences |
-| Backend tests | 66 passing | Multisig plan rules, keeper permissions, alert rules, failover against live HTTP endpoints |
+| Backend tests | 76 passing | Multisig plan rules, keeper permissions, alert rules, failover against live HTTP endpoints, transaction resubmission |
 | Upgrade path | rehearsed | Mainnet WASM deployed on testnet, upgraded to version 3 through the multisig, state compared before and after (`docs/evidence/testnet-rehearsal.md`) |
 | Storage migration | proven | Every contract reads the exact mainnet storage of 2026-11-23 correctly with no migration call (tests named `reads_the_live_mainnet_storage_unchanged`) |
 | Reentrancy | guarded | Flash loans block deposits, withdrawals and claims for their duration |

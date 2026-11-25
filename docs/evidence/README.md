@@ -1,15 +1,15 @@
-# Instawards SOW 2 — Evidence Index
+# Production Readiness — Evidence Index
 
-Where the evidence for each deliverable lives. "Pending" items need a signature or an account only
+Where the evidence for each piece of the production-readiness work lives. "Pending" items need a signature or an account only
 the team holds; the procedure for each is in `docs/MAINNET_CUTOVER.md`.
 
-## Deliverable 1: Admin multisig, keeper split, governance wiring
+## 1. Admin multisig, keeper split, governance wiring
 
 | Evidence | Where | State |
 |---|---|---|
 | Keeper on its own key, permissionless calls only | `backend/src/keeper/`, `backend/tests/keeper.test.ts` (checks each keeper method against the contract source) | Done; deployed |
 | Keeper public key is not the admin key | Keeper `GBT4TLLF…OQKV`, admin `GDWXTIIR…VZ5N`; the backend refuses to start the keeper with the admin key | Done |
-| Keeper liveness on the new key | Horizon transactions of the keeper account; `/health` `keeper.lastTtlBumpAt` | Pending: keeper not yet running in production |
+| Keeper liveness on the new key | Horizon transactions of `GBT4TLLF…OQKV`: on 2026-11-25 18:26–18:27 UTC `settle_interest` plus `bump_instance` on all five contracts, all successful; `/health` `keeper.lastTtlBumpAt` | Done; running in production |
 | Multisig tooling that refuses lockout plans | `backend/src/multisig/`, `backend/tests/multisig.test.ts` | Done |
 | Multisig rehearsal: conversion, one signature refused, two accepted | `docs/evidence/testnet-rehearsal.md`, sections 2–4 | Done on testnet |
 | Admin rotation available on all five contracts | `set_admin` in every contract, two-party; tests `admin_rotation_needs_both_keys` | Done in version 3 |
@@ -20,7 +20,7 @@ the team holds; the procedure for each is in `docs/MAINNET_CUTOVER.md`.
 | Recovery runbook | `docs/OPERATIONS.md`, *Admin key compromise* | Done |
 | Timed compromise-recovery drill | Rehearsal section 8 (seconds from decision to verified rotation) | Done on testnet |
 
-## Deliverable 2: Production alerts and RPC / Horizon failover
+## 2. Production alerts and RPC / Horizon failover
 
 | Evidence | Where | State |
 |---|---|---|
@@ -32,7 +32,7 @@ the team holds; the procedure for each is in `docs/MAINNET_CUTOVER.md`.
 | Forced primary failure still completes a read | `backend/tests/network.test.ts`: refused, 503 and dropped primary endpoints, call completes on the fallback; observed live when `mainnet.sorobanrpc.com` refused connections on 2026-11-23 | Done |
 | 30 days of a paid RPC plan | Provider choice and purchase | Pending: team decision |
 
-## Deliverable 3: Withdrawal-queue scale, property tests, source verification
+## 3. Withdrawal-queue scale, property tests, source verification
 
 | Evidence | Where | State |
 |---|---|---|
